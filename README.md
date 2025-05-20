@@ -4,7 +4,7 @@ This is the codebase for [Doubly Robust Alignment for Large Language Models](www
 
 
 
-![](./flowchart.png)
+![Double Robustness: Requires Only Correct Specification of Either the Reference Policy or the Preference Model.](./flowchart.png)
 
 ## Quickstart
 
