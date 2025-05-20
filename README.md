@@ -9,7 +9,7 @@ This is the codebase for [Doubly Robust Alignment for Large Language Models](www
 ## Quickstart
 
 ```bash
-git clone https://github.com/DRPO4LLM/Double-Robust-Preference-Optimization.git && cd drpo
+git clone https://github.com/DRPO4LLM/DRPO4LLM.git && cd drpo
 pip install -r requirements.txt
 ```
 
