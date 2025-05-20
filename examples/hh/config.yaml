@@ -1,0 +1,37 @@
+output_dir: ./output/hh/
+
+gradient_checkpointing: false
+model_and_preference_share_basemodel: true
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-7
+max_length: 1024
+generate_temperature: 0.66
+forward_temperature: 0.66
+beta: 0.04
+bf16: true
+dataset_num_proc: 1
+num_astar: 2
+torch_empty_cache_steps: 1
+num_train_epochs: 1
+eval_steps: 500
+eval_strategy: "no"
+save_strategy: "steps"
+save_steps: 1000
+logging_steps: 50
+push_to_hub: false
+hub_model_id: yourname/yourmodel
+report_to: 
+  - wandb
+is_bt_model: true # true then just write your reward model and it will be used to compute preference under BT framework
+preference_model_id: your_reward_model_hub_id_or_path
+preference_model_revision: your_reward_model_revision
+preference_model_kwargs:
+  indifferent: false
+  random: false
+  reverse: false
+ratio_processing: clip
+clipbound: 2.5
+max_grad_norm: 0.25
+loss1_only: false
+loss2_only: false
