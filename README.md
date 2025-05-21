@@ -1,7 +1,6 @@
 # Double Robust Preference Optimization
 
-This is the codebase for [Doubly Robust Alignment for Large Language Models](www.google.com)
-
+This is the codebase for Doubly Robust Alignment for Large Language Models(DRPO)
 
 
 ![Double Robustness: Requires Only Correct Specification of Either the Reference Policy or the Preference Model.](./flowchart.png)
