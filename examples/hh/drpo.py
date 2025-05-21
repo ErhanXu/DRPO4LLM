@@ -62,10 +62,7 @@ def main(script_args, training_args, model_args):
         model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
 
-    tokenizer.eos_token = "<|im_end|>"
-    print("special tokens", tokenizer.special_tokens_map)
-    print("eos_token_id", tokenizer.eos_token_id)
-    print("pad_token_id", tokenizer.pad_token_id)
+    tokenizer.eos_token = "<|im_end|>" # necessary for Qwen2.5, decide whether to use depending on your base model
 
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
