@@ -20,12 +20,12 @@ save_strategy: "steps"
 save_steps: 1000
 logging_steps: 50
 push_to_hub: false
-hub_model_id: yourname/yourmodel
+hub_model_id: Eehan/hh-test
 report_to: 
   - wandb
 is_bt_model: true # true then just write your reward model and it will be used to compute preference under BT framework
-preference_model_id: your_reward_model_hub_id_or_path
-preference_model_revision: your_reward_model_revision
+preference_model_id: Kyleyee/Qwen2.5-1.5B-reward-hh-retrain
+preference_model_revision: f70cf091d59583749f030005b70834d29ba70fda
 preference_model_kwargs:
   indifferent: false
   random: false

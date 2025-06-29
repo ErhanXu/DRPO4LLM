@@ -1,13 +1,10 @@
 import os
-
 import sys
-import os
-
 import yaml
 
 # Add the parent directory to Python path
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import numpy as np
 import random
@@ -35,11 +32,12 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
-from .trainer import DRPOConfig, DRPOTrainer
+from trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
+from trainer.drpo_config import DRPOConfig
+from trainer.drpo_trainer import DRPOTrainer
 
-DATASETNAME = "substitute for the dataset name"
-MODELNAME = "substitute for the ref and initial policy model name"
+DATASETNAME = "Kyleyee/train_data_tldr_for_drpo"
+MODELNAME = "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr"
 
 def main(script_args, training_args, model_args):
     ################
@@ -93,7 +91,7 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    raw_dataset = load_dataset(raw_dataset_id, "default")
+    raw_dataset = load_dataset(script_args.dataset_name, "default")
     dataset = transform_dataset(raw_dataset)
 
     print(f"\033[32mLoaded dataset sample:\033[0m {dataset['train'][0]}")
@@ -157,7 +155,7 @@ model_args = ModelConfig(
         model_name_or_path = MODELNAME,
 )
 
-with open(".examples/tldr/config.yaml", "r") as f:
+with open("./examples/tldr/config.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(

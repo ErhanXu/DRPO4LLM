@@ -2,8 +2,8 @@ import sys
 import os
 
 # Add the parent directory to Python path
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import yaml
 import torch
 from datasets import load_dataset, concatenate_datasets, DatasetDict
@@ -23,11 +23,12 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
-from .trainer import DRPOConfig, DRPOTrainer
+from trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
+from trainer.drpo_config import DRPOConfig
+from trainer.drpo_trainer import DRPOTrainer
 
-DATASETNAME = "substitute for the dataset name"
-MODELNAME = "substitute for the ref and initial policy model name"
+DATASETNAME = "Kyleyee/train_data_hh_for_drpo"
+MODELNAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"
 
 def main(script_args, training_args, model_args):
     ################
@@ -132,7 +133,7 @@ def main(script_args, training_args, model_args):
 if __name__ == "__main__":
     script_args = ScriptArguments(
             dataset_name=DATASETNAME,
-            dataset_config={"revision": "substitute for the revision"},
+            dataset_config={"revision": "f64ee333889902cf12ff3684a0ee7a22cd0abb16"},
             dataset_train_split="train",
             dataset_test_split="validation",
     )

@@ -20,10 +20,10 @@ save_strategy: "steps"
 save_steps: 1000
 logging_steps: 50
 push_to_hub: false
-hub_model_id: yourname/yourmodel
+hub_model_id: Eehan/tldr-test
   - wandb
 is_bt_model: false
-preference_model_id: your_preference_model_hub_id_or_path
+preference_model_id: cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr
 preference_model_kwargs:
   indifferent: false
   random: false
