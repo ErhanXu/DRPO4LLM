@@ -812,7 +812,7 @@ class DRPOTrainer(Trainer):
             assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
         
             logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
-            loss2 = -(logps_star * (preference_score_star.clone().detach() - 0.5 * torch.ones_like(logps_star))).mean()
+            loss2 = -(logps_star * (preference_score_star.clone().detach())).mean() # - 0.5 * torch.ones_like(logps_star))).mean()
 
             kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
             mean_kl = kl_onpolicy_part.mean()
@@ -858,7 +858,7 @@ class DRPOTrainer(Trainer):
             if self.args.ratio_processing == "clip":
                 self.stats['clipped_ratio'].append(self.accelerator.gather_for_metrics(clipped_ratio).mean().item())
         if not self.args.loss1_only:
-            self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(loss2).item())
+            self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(loss2).mean().item())
             self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star).mean().item())
             self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star*astar_attention_mask).sum(-1).mean().item())
             self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
