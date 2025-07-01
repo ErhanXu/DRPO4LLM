@@ -22,7 +22,7 @@ logging_steps: 50
 push_to_hub: false
 hub_model_id: Eehan/tldr-test
   - wandb
-is_bt_model: false
+is_bt_model: true
 preference_model_id: cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr
 preference_model_kwargs:
   indifferent: false
