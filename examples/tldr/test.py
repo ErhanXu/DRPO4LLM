@@ -99,9 +99,9 @@ def main():
         output_dir="./drpo-pythia-tldr",
         num_train_epochs=1,
         per_device_train_batch_size=2,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=2,
-        gradient_checkpointing=True,
+        per_device_eval_batch_size=2,
+        gradient_accumulation_steps=1,
+        gradient_checkpointing=False,
         
         # Learning rate and optimization
         learning_rate=5e-6,
@@ -115,11 +115,7 @@ def main():
         num_monte_carlo_samples=2,
         max_length=512,
         max_new_tokens=128,
-        
-        # Temperature settings
-        # forward_temperature=0.9,
-        # generate_temperature=1.0,
-        # temperature_schedule="constant",  # or "linear" for scheduling
+
         temperature=0.66,
         
         # Importance sampling control

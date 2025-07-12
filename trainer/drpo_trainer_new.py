@@ -190,6 +190,22 @@ class DRPOTrainer(OnlineDPOTrainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        if self.train_dataset is not None and "prompt_ids" not in self.train_dataset.column_names:
+            self.train_dataset = self._prepare_dataset(self.train_dataset, self.processing_class)
+        
+        if self.eval_dataset is not None:
+            if isinstance(self.eval_dataset, dict):
+                # Handle dict of datasets
+                self.eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class) 
+                    if "prompt_ids" not in dataset.column_names else dataset
+                    for key, dataset in self.eval_dataset.items()
+                }
+            else:
+                # Single eval dataset
+                if "prompt_ids" not in self.eval_dataset.column_names:
+                    self.eval_dataset = self._prepare_dataset(self.eval_dataset, self.processing_class)
         
         # Handle preference model with distributed training
         if self.preference_model is not None:
@@ -391,6 +407,38 @@ class DRPOTrainer(OnlineDPOTrainer):
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
         
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    @wraps(OnlineDPOTrainer.get_eval_dataloader)
+    def get_eval_dataloader(self, eval_dataset: Optional[Union[str, Dataset]] = None) -> DataLoader:
+        """Get eval dataloader with DRPO-specific data handling."""
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        
+        # Determine which dataset to use
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, str):
+                eval_dataset = self.eval_dataset[eval_dataset]
+        else:
+            eval_dataset = self.eval_dataset
+        
+        # Prepare dataset if needed (tokenize it)
+        if isinstance(eval_dataset, dict):
+            # Handle dict of datasets (e.g., {"validation": dataset1, "test": dataset2})
+            for key in eval_dataset:
+                if "prompt_ids" not in eval_dataset[key].column_names:
+                    eval_dataset[key] = self._prepare_dataset(
+                        eval_dataset[key], self.processing_class
+                    )
+        else:
+            # Single eval dataset
+            if "prompt_ids" not in eval_dataset.column_names:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class)
+        
+        # Update the stored eval dataset
+        self.eval_dataset = eval_dataset
+        
+        # Call parent's get_eval_dataloader
+        return super().get_eval_dataloader(eval_dataset)
     
     def _compute_preference_scores_batch(
         self,
