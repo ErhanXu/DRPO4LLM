@@ -265,7 +265,7 @@ class DRPOTrainer(OnlineDPOTrainer):
             # KL divergence metrics (computed from generated samples)
             "objective/kl": [],  # Mean KL[π||π_ref] from generated samples
             "objective/entropy": [],  # Entropy of generated samples
-            "objective/kl_per_token": [],  # Average per-token KL
+            # "objective/kl_per_token": [],  # Average per-token KL
             "beta": [],
             
             # Loss components
@@ -785,7 +785,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         mc_samples = []
         mc_logprobs_list = []
         mc_ref_logprobs_list = []
-        mc_kl_per_token_list = []
+        # mc_kl_per_token_list = []
         mc_kl_total_list = []
         mc_entropy_list = []
         
@@ -810,11 +810,11 @@ class DRPOTrainer(OnlineDPOTrainer):
                 mc_ref_logprobs_list.append(mc_ref_logprobs)
 
                 # Compute KL[π||π_ref] for this generated sample
-                per_token_kl, total_kl = self._compute_kl_divergence(
+                _, total_kl = self._compute_kl_divergence(
                     mc_logprobs, mc_ref_logprobs, mc_mask,
                     kl_type=self.args.kl_type
                 )
-                mc_kl_per_token_list.append(per_token_kl)
+                # mc_kl_per_token_list.append(per_token_kl)
                 mc_kl_total_list.append(total_kl)
                 
                 # Compute entropy H(π) = -E[log π]
@@ -1043,12 +1043,12 @@ class DRPOTrainer(OnlineDPOTrainer):
             )
             
             # Per-token KL average
-            all_kl_per_token = torch.cat(mc_kl_per_token_list, dim=0)
-            all_masks = torch.cat([mask for _, mask in mc_samples], dim=0)
-            avg_per_token_kl = all_kl_per_token.sum() / all_masks.sum()
-            self.stats["objective/kl_per_token"].append(
-                self.accelerator.gather_for_metrics(avg_per_token_kl).item()
-            )
+            # all_kl_per_token = torch.cat(mc_kl_per_token_list, dim=0)
+            # all_masks = torch.cat([mask for _, mask in mc_samples], dim=0)
+            # avg_per_token_kl = all_kl_per_token.sum() / all_masks.sum()
+            # self.stats["objective/kl_per_token"].append(
+            #     self.accelerator.gather_for_metrics(avg_per_token_kl).item()
+            # )
             
             # Entropy
             all_entropy = torch.stack(mc_entropy_list)
