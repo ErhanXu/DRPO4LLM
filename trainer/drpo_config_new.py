@@ -82,3 +82,25 @@ class DRPOConfig(OnlineDPOConfig):
         default=None,
         metadata={"help": "Maximum length for completions (truncated from right)"}
     )
+    
+    # Evaluation parameters
+    eval_with_generation: bool = field(
+        default=True,
+        metadata={"help": "Whether to generate samples during evaluation for quality metrics"}
+    )
+    
+    eval_mc_samples: int = field(
+        default=1,
+        metadata={"help": "Number of MC samples to generate during evaluation"}
+    )
+    
+    # If you want to track specific metrics
+    metric_for_best_model: Optional[str] = field(
+        default="eval_generated/win_rate_vs_rejected",
+        metadata={"help": "Metric to use for selecting best model"}
+    )
+    
+    greater_is_better: Optional[bool] = field(
+        default=True,
+        metadata={"help": "Whether higher metric value is better"}
+    )

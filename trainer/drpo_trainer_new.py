@@ -1,7 +1,7 @@
 import os
 import textwrap
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 from packaging import version
 
 import torch
@@ -262,11 +262,10 @@ class DRPOTrainer(OnlineDPOTrainer):
             "rewards/margins": [],                # log π(chosen) - log π(rejected)
             "rewards/accuracy": [],               # P(log π(chosen) > log π(rejected))
             
-            # KL and regularization
-            "objective/kl": [],
-            "objective/kl_chosen": [],
-            "objective/kl_rejected": [],
-            "objective/kl_generated": [],         # KL for generated samples (k3 only)
+            # KL divergence metrics (computed from generated samples)
+            "objective/kl": [],  # Mean KL[π||π_ref] from generated samples
+            "objective/entropy": [],  # Entropy of generated samples
+            "objective/kl_per_token": [],  # Average per-token KL
             "beta": [],
             
             # Loss components
@@ -589,6 +588,42 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         return controlled_ratios
     
+    def _compute_kl_divergence(
+        self,
+        logprobs: torch.Tensor,
+        ref_logprobs: torch.Tensor,
+        mask: torch.Tensor,
+        kl_type: str = "k3"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute KL divergence KL[π||π_ref] using specified estimator.
+        
+        Args:
+            logprobs: Log probabilities under current policy π
+            ref_logprobs: Log probabilities under reference policy π_ref
+            mask: Attention mask
+            kl_type: "k1" or "k3"
+            
+        Returns:
+            per_token_kl: Per-token KL divergence
+            total_kl: Total KL divergence per sequence
+        """
+        if kl_type == "k1":
+            # Standard unbiased estimator: log(π/π_ref)
+            per_token_kl = (logprobs - ref_logprobs) * mask
+            
+        elif kl_type == "k3":
+            # Lower variance unbiased estimator: (π_ref/π - 1) - log(π_ref/π)
+            log_ratio = ref_logprobs - logprobs
+            ratio = torch.exp(torch.clamp(log_ratio, -10, 10))
+            per_token_kl = ((ratio - 1) - log_ratio) * mask
+            
+        else:
+            raise ValueError(f"Unknown KL estimator: {kl_type}")
+        
+        total_kl = per_token_kl.sum(dim=1)
+        return per_token_kl, total_kl
+    
     def _forward(self, model, prompt_ids, prompt_attention_mask, 
                  completion_ids, completion_attention_mask):
         """Override to apply temperature scaling using instance temperature."""
@@ -750,6 +785,9 @@ class DRPOTrainer(OnlineDPOTrainer):
         mc_samples = []
         mc_logprobs_list = []
         mc_ref_logprobs_list = []
+        mc_kl_per_token_list = []
+        mc_kl_total_list = []
+        mc_entropy_list = []
         
         for _ in range(self.args.num_monte_carlo_samples):
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
@@ -770,6 +808,18 @@ class DRPOTrainer(OnlineDPOTrainer):
                     with self.model.disable_adapter():
                         mc_ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, mc_ids, mc_mask)
                 mc_ref_logprobs_list.append(mc_ref_logprobs)
+
+                # Compute KL[π||π_ref] for this generated sample
+                per_token_kl, total_kl = self._compute_kl_divergence(
+                    mc_logprobs, mc_ref_logprobs, mc_mask,
+                    kl_type=self.args.kl_type
+                )
+                mc_kl_per_token_list.append(per_token_kl)
+                mc_kl_total_list.append(total_kl)
+                
+                # Compute entropy H(π) = -E[log π]
+                entropy = -(mc_logprobs * mc_mask).sum(dim=1)
+                mc_entropy_list.append(entropy)
             
             mc_samples.append((mc_ids, mc_mask))
         
@@ -847,29 +897,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         # DRPO loss (negative because we maximize the estimator)
         drpo_loss = -term_dm.mean() + is_loss
 
-        # KL regularization with k1 or k3 estimation
-        if self.args.kl_type == "k1":
-            # k1: Standard KL using offline chosen/rejected samples
-            kl_chosen = ((chosen_logprobs - chosen_ref_logprobs) * chosen_mask).sum(1)
-            kl_rejected = ((rejected_logprobs - rejected_ref_logprobs) * rejected_mask).sum(1)
-            kl_loss = 0.5 * (kl_chosen + kl_rejected).mean()
-            
-        else:  # k3: Using generated MC samples
-            # k3: E_y~π[π_ref(y|x)/π(y|x) - 1 - log(π_ref(y|x)/π(y|x))]
-            kl_terms = []
-            for mc_logprobs, mc_ref_logprobs, (_, mc_mask) in zip(mc_logprobs_list, mc_ref_logprobs_list, mc_samples):
-                mc_logprobs_sum = (mc_logprobs * mc_mask).sum(dim=1)
-                mc_ref_logprobs_sum = (mc_ref_logprobs * mc_mask).sum(dim=1)
-                
-                # Compute π_ref/π ratio
-                log_ratio = mc_ref_logprobs_sum - mc_logprobs_sum
-                ratio = torch.exp(torch.clamp(log_ratio, -1e3, 10))  # Clamp for stability
-                
-                # k3 KL: ratio - 1 - log(ratio)
-                kl_term = ratio - 1 - log_ratio
-                kl_terms.append(kl_term)
-            
-            kl_loss = torch.stack(kl_terms).mean()
+        kl_loss = torch.stack(mc_kl_total_list).mean()  # Use MC samples for KL loss
             
         # Total loss
         loss = drpo_loss + self.beta * kl_loss
@@ -1009,22 +1037,25 @@ class DRPOTrainer(OnlineDPOTrainer):
             )
             
             # KL statistics
+            all_kl_total = torch.stack(mc_kl_total_list)
             self.stats["objective/kl"].append(
-                self.accelerator.gather_for_metrics(kl_loss).mean().item()
+                self.accelerator.gather_for_metrics(all_kl_total).mean().item()
             )
-            if self.args.kl_type == "k1":
-                self.stats["objective/kl_chosen"].append(
-                    self.accelerator.gather_for_metrics(kl_chosen).mean().item()
-                )
-                self.stats["objective/kl_rejected"].append(
-                    self.accelerator.gather_for_metrics(kl_rejected).mean().item()
-                )
-            else:  # k3
-                # For k3, track KL of generated samples
-                kl_generated = torch.stack(kl_terms).mean()
-                self.stats["objective/kl_generated"].append(
-                    self.accelerator.gather_for_metrics(kl_generated).mean().item()
-                )
+            
+            # Per-token KL average
+            all_kl_per_token = torch.cat(mc_kl_per_token_list, dim=0)
+            all_masks = torch.cat([mask for _, mask in mc_samples], dim=0)
+            avg_per_token_kl = all_kl_per_token.sum() / all_masks.sum()
+            self.stats["objective/kl_per_token"].append(
+                self.accelerator.gather_for_metrics(avg_per_token_kl).item()
+            )
+            
+            # Entropy
+            all_entropy = torch.stack(mc_entropy_list)
+            self.stats["objective/entropy"].append(
+                self.accelerator.gather_for_metrics(all_entropy).mean().item()
+            )
+
             
             # Loss components
             self.stats["loss/drpo"].append(
@@ -1143,6 +1174,218 @@ class DRPOTrainer(OnlineDPOTrainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[int] = None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, Any]]]:
+        """
+        Compute loss for DRPO. During training, delegates to training_step.
+        During evaluation, computes preference accuracy and generation quality metrics.
+        
+        Args:
+            model: The model to evaluate
+            inputs: Dictionary containing prompt_ids, chosen_ids, rejected_ids, etc.
+            return_outputs: Whether to return additional outputs
+            num_items_in_batch: Number of items in batch (for gradient accumulation)
+            
+        Returns:
+            Loss tensor, or (loss, outputs) tuple if return_outputs=True
+        """
+        if model.training:
+            # During training, use the custom training_step
+            loss = self.training_step(model, inputs, num_items_in_batch)
+            # Return empty dict as outputs to maintain compatibility
+            return (loss, {}) if return_outputs else loss
+        
+        # Evaluation mode: compute comprehensive metrics
+        model.eval()
+        device = self.accelerator.device
+        
+        with torch.no_grad():
+            # Extract inputs (matching your data collator format)
+            prompt_ids = inputs["prompt_ids"].to(device)
+            prompt_mask = inputs["prompt_attention_mask"].to(device)
+            chosen_ids = inputs["chosen_ids"].to(device)
+            chosen_mask = inputs["chosen_attention_mask"].to(device)
+            rejected_ids = inputs["rejected_ids"].to(device)
+            rejected_mask = inputs["rejected_attention_mask"].to(device)
+            
+            # Get text inputs if available (for judge)
+            prompt_texts = inputs.get("prompt", None)
+            chosen_texts = inputs.get("chosen", None)
+            rejected_texts = inputs.get("rejected", None)
+            
+            batch_size = prompt_ids.size(0)
+            
+            # 1. Compute preference accuracy between chosen and rejected
+            chosen_logprobs = self._forward(model, prompt_ids, prompt_mask, chosen_ids, chosen_mask)
+            rejected_logprobs = self._forward(model, prompt_ids, prompt_mask, rejected_ids, rejected_mask)
+            
+            chosen_logprobs_sum = (chosen_logprobs * chosen_mask).sum(1)
+            rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(1)
+            
+            # Model's implicit preference (higher log prob = preferred)
+            model_prefers_chosen = (chosen_logprobs_sum > rejected_logprobs_sum).float()
+            preference_accuracy = model_prefers_chosen.mean()
+            
+            # 2. Compute actual preference score using preference model
+            g_chosen_rejected = self._compute_preference_scores_batch(
+                prompt_ids, prompt_mask,
+                chosen_ids, chosen_mask,
+                rejected_ids, rejected_mask,
+                chosen_texts, rejected_texts
+            )
+            preference_alignment = ((g_chosen_rejected > 0.5).float() == model_prefers_chosen).float().mean()
+            
+            metrics = {
+                'preference_accuracy': preference_accuracy.item(),
+                'preference_alignment': preference_alignment.item(),
+                'g_chosen_rejected': g_chosen_rejected.mean().item(),
+            }
+            
+            # 3. Generate MC samples if requested
+            if getattr(self.args, 'eval_with_generation', True):
+                num_eval_samples = getattr(self.args, 'eval_mc_samples', 2)
+                
+                all_g_mc_rejected = []
+                all_g_mc_chosen = []
+                all_mc_lengths = []
+                all_mc_logprobs_sum = []
+                all_mc_kl = []
+                all_mc_entropy = []
+                
+                for _ in range(num_eval_samples):
+                    # Generate samples
+                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                        _, _, mc_ids, mc_mask = self._generate(unwrapped_model, prompt_ids, prompt_mask)
+                    
+                    mc_ids = mc_ids.to(device)
+                    mc_mask = mc_mask.to(device)
+                    
+                    # Compute log probabilities
+                    mc_logprobs = self._forward(model, prompt_ids, prompt_mask, mc_ids, mc_mask)
+                    mc_logprobs_sum = (mc_logprobs * mc_mask).sum(1)
+                    all_mc_logprobs_sum.append(mc_logprobs_sum)
+
+                    # Compute log probabilities under reference policy
+                    if self.ref_model is not None:
+                        mc_ref_logprobs = self._forward(
+                            self.ref_model, prompt_ids, prompt_mask, mc_ids, mc_mask
+                        )
+                    else:
+                        with self.model.disable_adapter():
+                            mc_ref_logprobs = self._forward(
+                                self.model, prompt_ids, prompt_mask, mc_ids, mc_mask
+                            )
+                    
+                    # Compute KL[π||π_ref] for generated samples
+                    _, total_kl = self._compute_kl_divergence(
+                        mc_logprobs, mc_ref_logprobs, mc_mask,
+                        kl_type=self.args.kl_type
+                    )
+                    all_mc_kl.append(total_kl)
+                    
+                    # Compute entropy H(π)
+                    entropy = -(mc_logprobs * mc_mask).sum(1)
+                    all_mc_entropy.append(entropy)
+                    
+                    # Compute preference scores
+                    g_mc_rejected = self._compute_preference_scores_batch(
+                        prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
+                    )
+                    g_mc_chosen = self._compute_preference_scores_batch(
+                        prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask
+                    )
+                    
+                    all_g_mc_rejected.append(g_mc_rejected)
+                    all_g_mc_chosen.append(g_mc_chosen)
+                    
+                    # Track generation lengths
+                    mc_lengths = mc_mask.sum(1)
+                    all_mc_lengths.append(mc_lengths)
+                
+                # Aggregate generation metrics
+                all_g_mc_rejected = torch.stack(all_g_mc_rejected)
+                all_g_mc_chosen = torch.stack(all_g_mc_chosen)
+                all_mc_lengths = torch.stack(all_mc_lengths)
+                all_mc_logprobs_sum = torch.stack(all_mc_logprobs_sum)
+                all_mc_kl = torch.stack(all_mc_kl)
+                all_mc_entropy = torch.stack(all_mc_entropy)
+
+                # Compute generation quality metrics
+                metrics.update({
+                    'generated/vs_rejected_mean': all_g_mc_rejected.mean().item(),
+                    'generated/vs_rejected_std': all_g_mc_rejected.std().item(),
+                    'generated/vs_chosen_mean': all_g_mc_chosen.mean().item(),
+                    'generated/vs_chosen_std': all_g_mc_chosen.std().item(),
+                    'generated/win_rate_vs_rejected': (all_g_mc_rejected > 0.5).float().mean().item(),
+                    'generated/win_rate_vs_chosen': (all_g_mc_chosen > 0.5).float().mean().item(),
+                    'generated/avg_length': all_mc_lengths.float().mean().item(),
+                    'generated/logprobs_mean': all_mc_logprobs_sum.mean().item(),
+                    # KL divergence (from generated samples only!)
+                    'eval/kl_divergence': all_mc_kl.mean().item(),
+                    'eval/kl_divergence_std': all_mc_kl.std().item(),
+                    
+                    # Entropy
+                    'eval/entropy': all_mc_entropy.mean().item(),
+                    'eval/entropy_std': all_mc_entropy.std().item(),
+                })
+            
+            
+            # Use negative preference accuracy as loss (lower is better)
+            loss = -preference_accuracy
+            
+            # Create outputs dict compatible with Trainer expectations
+            outputs = {
+                'loss': loss,
+                'metrics': metrics,
+                # Include for compatibility with prediction_step
+                'logits': model_prefers_chosen.unsqueeze(-1),  # [batch_size, 1]
+                'labels': torch.ones_like(model_prefers_chosen).unsqueeze(-1),  # chosen should be preferred
+            }
+            
+        return (loss, outputs) if return_outputs else loss
+
+
+    # Optional: Override prediction_step to properly aggregate metrics
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Custom prediction step that properly handles DRPO evaluation.
+        """
+        loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+        
+        # Store metrics for aggregation
+        if not hasattr(self, '_eval_metrics_accumulator'):
+            self._eval_metrics_accumulator = {}
+            self._eval_metrics_count = 0
+        
+        # Accumulate metrics
+        if 'metrics' in outputs:
+            for key, value in outputs['metrics'].items():
+                if key not in self._eval_metrics_accumulator:
+                    self._eval_metrics_accumulator[key] = 0
+                self._eval_metrics_accumulator[key] += value
+            self._eval_metrics_count += 1
+        
+        if prediction_loss_only:
+            return (loss, None, None)
+        
+        # Return logits and labels for compatibility
+        logits = outputs.get('logits', None)
+        labels = outputs.get('labels', None)
+        
+        return (loss, logits, labels)
+
             
     def create_model_card(
         self,
