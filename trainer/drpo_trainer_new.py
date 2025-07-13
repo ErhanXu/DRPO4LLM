@@ -781,70 +781,112 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         batch_size = prompt_ids.shape[0]
         
-        # Generate Monte Carlo samples for DM term AND KL estimation
-        mc_samples = []
-        mc_logprobs_list = []
-        mc_ref_logprobs_list = []
-        # mc_kl_per_token_list = []
-        mc_kl_total_list = []
-        mc_entropy_list = []
+        # # Generate Monte Carlo samples for DM term AND KL estimation
+        # mc_samples = []
+        # mc_logprobs_list = []
+        # mc_ref_logprobs_list = []
+        # # mc_kl_per_token_list = []
+        # mc_kl_total_list = []
+        # mc_entropy_list = []
         
-        for _ in range(self.args.num_monte_carlo_samples):
-            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                _, _, mc_ids, mc_mask = self._generate(unwrapped_model, prompt_ids, prompt_mask)
+        # for _ in range(self.args.num_monte_carlo_samples):
+        #     with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+        #         _, _, mc_ids, mc_mask = self._generate(unwrapped_model, prompt_ids, prompt_mask)
             
-            mc_ids = mc_ids.to(device)
-            mc_mask = mc_mask.to(device)
+        #     mc_ids = mc_ids.to(device)
+        #     mc_mask = mc_mask.to(device)
             
-            # Compute logprobs for this MC sample
-            mc_logprobs = self._forward(model, prompt_ids, prompt_mask, mc_ids, mc_mask)
-            mc_logprobs_list.append(mc_logprobs)
+        #     # Compute logprobs for this MC sample
+        #     mc_logprobs = self._forward(model, prompt_ids, prompt_mask, mc_ids, mc_mask)
+        #     mc_logprobs_list.append(mc_logprobs)
             
-            # Compute reference logprobs for KL
-            with torch.no_grad():
-                if self.ref_model is not None:
-                    mc_ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_mask, mc_ids, mc_mask)
-                else:
-                    with self.model.disable_adapter():
-                        mc_ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, mc_ids, mc_mask)
-                mc_ref_logprobs_list.append(mc_ref_logprobs)
+        #     # Compute reference logprobs for KL
+        #     with torch.no_grad():
+        #         if self.ref_model is not None:
+        #             mc_ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_mask, mc_ids, mc_mask)
+        #         else:
+        #             with self.model.disable_adapter():
+        #                 mc_ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, mc_ids, mc_mask)
+        #         mc_ref_logprobs_list.append(mc_ref_logprobs)
 
-                # Compute KL[π||π_ref] for this generated sample
-                _, total_kl = self._compute_kl_divergence(
-                    mc_logprobs, mc_ref_logprobs, mc_mask,
-                    kl_type=self.args.kl_type
-                )
-                # mc_kl_per_token_list.append(per_token_kl)
-                mc_kl_total_list.append(total_kl)
+        #         # Compute KL[π||π_ref] for this generated sample
+        #         _, total_kl = self._compute_kl_divergence(
+        #             mc_logprobs, mc_ref_logprobs, mc_mask,
+        #             kl_type=self.args.kl_type
+        #         )
+        #         # mc_kl_per_token_list.append(per_token_kl)
+        #         mc_kl_total_list.append(total_kl)
                 
-                # Compute entropy H(π) = -E[log π]
-                entropy = -(mc_logprobs * mc_mask).sum(dim=1)
-                mc_entropy_list.append(entropy)
+        #         # Compute entropy H(π) = -E[log π]
+        #         entropy = -(mc_logprobs * mc_mask).sum(dim=1)
+        #         mc_entropy_list.append(entropy)
             
-            mc_samples.append((mc_ids, mc_mask))
+        #     mc_samples.append((mc_ids, mc_mask))
         
-        # Compute log probabilities under policy and reference
-        chosen_logprobs = self._forward(model, prompt_ids, prompt_mask, chosen_ids, chosen_mask)
-        rejected_logprobs = self._forward(model, prompt_ids, prompt_mask, rejected_ids, rejected_mask)
+        # # Compute log probabilities under policy and reference
+        # chosen_logprobs = self._forward(model, prompt_ids, prompt_mask, chosen_ids, chosen_mask)
+        # rejected_logprobs = self._forward(model, prompt_ids, prompt_mask, rejected_ids, rejected_mask)
+        
+        # with torch.no_grad():
+        #     if self.ref_model is not None:
+        #         chosen_ref_logprobs = self._forward(
+        #             self.ref_model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
+        #         )
+        #         rejected_ref_logprobs = self._forward(
+        #             self.ref_model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
+        #         )
+        #     else:
+        #         # PEFT case - use base model as reference
+        #         with self.model.disable_adapter():
+        #             chosen_ref_logprobs = self._forward(
+        #                 self.model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
+        #             )
+        #             rejected_ref_logprobs = self._forward(
+        #                 self.model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
+        #             )
+
+        # === Refactored Logic: Step 1 - Generate all MC samples first ===
+        mc_samples = []
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            for _ in range(self.args.num_monte_carlo_samples):
+                _, _, mc_ids, mc_mask = self._generate(unwrapped_model, prompt_ids, prompt_mask)
+                mc_samples.append((mc_ids.to(device), mc_mask.to(device)))
+        
+        mc_ids_list = [mc[0] for mc in mc_samples]
+        mc_mask_list = [mc[1] for mc in mc_samples]
+
+        # === Refactored Logic: Step 2 - Consolidate all inputs for forward passes ===
+        num_sequences = 2 + self.args.num_monte_carlo_samples
+        
+        # [batch * (2 + num_mc), seq_len]
+        all_completion_ids = torch.cat([chosen_ids, rejected_ids] + mc_ids_list, dim=0)
+        all_completion_masks = torch.cat([chosen_mask, rejected_mask] + mc_mask_list, dim=0)
+
+        # Repeat prompts to match the number of completions
+        all_prompt_ids = prompt_ids.repeat(num_sequences, 1)
+        all_prompt_masks = prompt_mask.repeat(num_sequences, 1)
+
+        # === Refactored Logic: Step 3 - Perform single, unified forward passes ===
+        all_logprobs = self._forward(model, all_prompt_ids, all_prompt_masks, all_completion_ids, all_completion_masks)
         
         with torch.no_grad():
             if self.ref_model is not None:
-                chosen_ref_logprobs = self._forward(
-                    self.ref_model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
-                )
-                rejected_ref_logprobs = self._forward(
-                    self.ref_model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
-                )
+                all_ref_logprobs = self._forward(self.ref_model, all_prompt_ids, all_prompt_masks, all_completion_ids, all_completion_masks)
             else:
-                # PEFT case - use base model as reference
                 with self.model.disable_adapter():
-                    chosen_ref_logprobs = self._forward(
-                        self.model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
-                    )
-                    rejected_ref_logprobs = self._forward(
-                        self.model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
-                    )
-        
+                    all_ref_logprobs = self._forward(self.model, all_prompt_ids, all_prompt_masks, all_completion_ids, all_completion_masks)
+
+        # === Refactored Logic: Step 4 - Split the results back into components ===
+        all_logprobs_split = torch.chunk(all_logprobs, chunks=num_sequences, dim=0)
+        all_ref_logprobs_split = torch.chunk(all_ref_logprobs, chunks=num_sequences, dim=0)
+
+        chosen_logprobs, rejected_logprobs = all_logprobs_split[0], all_logprobs_split[1]
+        mc_logprobs_list = list(all_logprobs_split[2:])
+
+        chosen_ref_logprobs, rejected_ref_logprobs = all_ref_logprobs_split[0], all_ref_logprobs_split[1]
+        mc_ref_logprobs_list = list(all_ref_logprobs_split[2:])
+
+
         # Vectorized preference score computation
         g_chosen_rejected = self._compute_preference_scores_batch(
             prompt_ids, prompt_mask,
@@ -855,19 +897,40 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         # Direct Method (DM) term
         term_dm = torch.zeros(batch_size, device=device)
-        for (mc_ids, mc_mask), mc_logprobs in zip(mc_samples, mc_logprobs_list):
-            # g(mc, rejected)
-            g_mc_rejected = self._compute_preference_scores_batch(
-                prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
-            )
-            # g(mc, chosen)
-            g_mc_chosen = self._compute_preference_scores_batch(
-                prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask
-            )
+        # for (mc_ids, mc_mask), mc_logprobs in zip(mc_samples, mc_logprobs_list):
+        #     # g(mc, rejected)
+        #     g_mc_rejected = self._compute_preference_scores_batch(
+        #         prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
+        #     )
+        #     # g(mc, chosen)
+        #     g_mc_chosen = self._compute_preference_scores_batch(
+        #         prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask
+        #     )
 
-            # Weight by log probability
+        #     # Weight by log probability
+        #     mc_logprobs_sum = (mc_logprobs * mc_mask).sum(dim=1)
+        #     term_dm += (g_mc_rejected + g_mc_chosen) * mc_logprobs_sum
+
+        mc_kl_total_list = []
+        mc_entropy_list = []
+
+        for i in range(self.args.num_monte_carlo_samples):
+            mc_ids, mc_mask = mc_samples[i]
+            mc_logprobs = mc_logprobs_list[i]
+            mc_ref_logprobs = mc_ref_logprobs_list[i]
+            
+            g_mc_rejected = self._compute_preference_scores_batch(prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask)
+            g_mc_chosen = self._compute_preference_scores_batch(prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask)
+            
             mc_logprobs_sum = (mc_logprobs * mc_mask).sum(dim=1)
             term_dm += (g_mc_rejected + g_mc_chosen) * mc_logprobs_sum
+
+            # Compute KL and Entropy for this sample
+            with torch.no_grad():
+                _, total_kl = self._compute_kl_divergence(mc_logprobs, mc_ref_logprobs, mc_mask, kl_type=self.args.kl_type)
+                mc_kl_total_list.append(total_kl)
+                entropy = -(mc_logprobs * mc_mask).sum(dim=1)
+                mc_entropy_list.append(entropy)
         
         term_dm = term_dm / (2 * self.args.num_monte_carlo_samples)
         

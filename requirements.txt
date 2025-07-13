@@ -1,10 +1,12 @@
 accelerate
 datasets
 rich
-transformers>=4.46.0
+transformers
 torch
 parameterized
 huggingface_hub
 wandb
 openai
 trl
+deepspeed
+peft
