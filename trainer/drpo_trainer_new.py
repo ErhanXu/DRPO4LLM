@@ -1059,13 +1059,13 @@ class DRPOTrainer(OnlineDPOTrainer):
             
             # Loss components
             self.stats["loss/drpo"].append(
-                self.accelerator.gather_for_metrics(drpo_loss).item()
+                self.accelerator.gather_for_metrics(drpo_loss).mean().item()
             )
             self.stats["loss/kl"].append(
-                self.accelerator.gather_for_metrics(self.beta * kl_loss).item()
+                self.accelerator.gather_for_metrics(self.beta * kl_loss).mean().item()
             )
             self.stats["loss/total"].append(
-                self.accelerator.gather_for_metrics(loss).item()
+                self.accelerator.gather_for_metrics(loss).mean().item()
             )
             
             self.stats["beta"].append(self.beta)
