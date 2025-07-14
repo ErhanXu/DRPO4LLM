@@ -857,14 +857,46 @@ class DRPOTrainer(OnlineDPOTrainer):
 
         # === Refactored Logic: Step 2 - Consolidate all inputs for forward passes ===
         num_sequences = 2 + self.args.num_monte_carlo_samples
-        
-        # [batch * (2 + num_mc), seq_len]
-        all_ids_to_pad = [chosen_ids, rejected_ids] + mc_ids_list
-        all_masks_to_pad = [chosen_mask, rejected_mask] + mc_mask_list
-        all_completion_ids = pad(all_ids_to_pad, padding_value=self.processing_class.pad_token_id)
-        all_completion_masks = pad(all_masks_to_pad, padding_value=0)
-        # all_completion_ids = torch.cat(padded_ids_list, dim=0)
-        # all_completion_masks = torch.cat(padded_mask_list, dim=0)
+
+        # If MC samples have different lengths, pad them to match
+        if mc_ids_list:
+            # Find max length across all completions
+            max_length = max(
+                chosen_ids.size(1), 
+                rejected_ids.size(1), 
+                *[mc_ids.size(1) for mc_ids in mc_ids_list]
+            )
+            
+            # Pad all tensors to the same length if needed
+            def pad_to_length(tensor, target_length, pad_value):
+                if tensor.size(1) < target_length:
+                    padding = torch.full(
+                        (tensor.size(0), target_length - tensor.size(1)), 
+                        pad_value, 
+                        device=tensor.device, 
+                        dtype=tensor.dtype
+                    )
+                    return torch.cat([tensor, padding], dim=1)
+                return tensor
+            
+            chosen_ids_padded = pad_to_length(chosen_ids, max_length, self.processing_class.pad_token_id)
+            rejected_ids_padded = pad_to_length(rejected_ids, max_length, self.processing_class.pad_token_id)
+            mc_ids_padded = [pad_to_length(mc_ids, max_length, self.processing_class.pad_token_id) for mc_ids in mc_ids_list]
+            
+            chosen_mask_padded = pad_to_length(chosen_mask, max_length, 0)
+            rejected_mask_padded = pad_to_length(rejected_mask, max_length, 0)
+            mc_mask_padded = [pad_to_length(mc_mask, max_length, 0) for mc_mask in mc_mask_list]
+        else:
+            chosen_ids_padded = chosen_ids
+            rejected_ids_padded = rejected_ids
+            mc_ids_padded = mc_ids_list
+            chosen_mask_padded = chosen_mask
+            rejected_mask_padded = rejected_mask
+            mc_mask_padded = mc_mask_list
+
+        # Then concatenate along the batch dimension (dim=0)
+        all_completion_ids = torch.cat([chosen_ids_padded, rejected_ids_padded] + mc_ids_padded, dim=0)
+        all_completion_masks = torch.cat([chosen_mask_padded, rejected_mask_padded] + mc_mask_padded, dim=0)
 
         # Repeat prompts to match the number of completions
         all_prompt_ids = prompt_ids.repeat(num_sequences, 1)
