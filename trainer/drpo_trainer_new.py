@@ -861,8 +861,8 @@ class DRPOTrainer(OnlineDPOTrainer):
         # [batch * (2 + num_mc), seq_len]
         all_ids_to_pad = [chosen_ids, rejected_ids] + mc_ids_list
         all_masks_to_pad = [chosen_mask, rejected_mask] + mc_mask_list
-        padded_ids_list = pad(all_ids_to_pad, pad_token=self.processing_class.pad_token_id)
-        padded_mask_list = pad(all_masks_to_pad, pad_token=0)
+        padded_ids_list = pad(all_ids_to_pad, padding_value=self.processing_class.pad_token_id)
+        padded_mask_list = pad(all_masks_to_pad, padding_value=0)
         all_completion_ids = torch.cat(padded_ids_list, dim=0)
         all_completion_masks = torch.cat(padded_mask_list, dim=0)
 
