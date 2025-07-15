@@ -1145,12 +1145,12 @@ class DRPOTrainer(OnlineDPOTrainer):
                     if key == "generated/vs_rejected_mean":
                         logs["generated/advantage_over_rejected"] = avg_value - 0.5
                     elif key == "generated/vs_chosen_mean":
-                        logs["generated/disadvantage_vs_chosen"] = avg_value - 0.5
+                        logs["generated/advantage_vs_chosen"] = avg_value - 0.5
             
             # Compute some composite metrics
             if "generated/win_rate_vs_rejected" in logs and "generated/win_rate_vs_chosen" in logs:
                 logs["generated/balanced_quality"] = (
-                    logs["generated/win_rate_vs_rejected"] * (1 - logs["generated/win_rate_vs_chosen"])
+                    logs["generated/win_rate_vs_rejected"] * (logs["generated/win_rate_vs_chosen"])
                 ) ** 0.5
             
             if "is_ratio/clip_rate_chosen" in logs and "is_ratio/clip_rate_rejected" in logs:
@@ -1171,21 +1171,26 @@ class DRPOTrainer(OnlineDPOTrainer):
         # Traditional evaluation on validation set (optional)
         metrics = None
         if self.control.should_evaluate:
+            # Reset accumulator before evaluation
+            self._eval_metrics_accumulator = {}
+            self._eval_metrics_count = 0
+            
             if self.eval_dataset is not None:
                 metrics = self._evaluate(trial, ignore_keys_for_eval)
+                
+                # Add accumulated custom metrics
+                if hasattr(self, '_eval_metrics_accumulator') and self._eval_metrics_count > 0:
+                    for key, value in self._eval_metrics_accumulator.items():
+                        avg_value = value / self._eval_metrics_count
+                        # Add eval_ prefix if not already present
+                        prefixed_key = f"eval_{key}" if not key.startswith("eval_") else key
+                        metrics[prefixed_key] = avg_value
             else:
                 # If no eval dataset, we can still compute metrics from training stats
                 metrics = {}
                 for key in ["generated/win_rate_vs_rejected", "rewards/accuracy", "objective/kl"]:
                     if key in logs:
                         metrics[f"eval_{key}"] = logs[key]
-            
-            # Determine if this is the best model so far
-            if metrics:
-                is_new_best_metric = self._determine_best_metric(metrics=metrics, trial=trial)
-                
-                if self.args.save_strategy == "best":
-                    self.control.should_save = is_new_best_metric
         
         if self.control.should_save:
             self._save_checkpoint(model, trial)
@@ -1401,6 +1406,39 @@ class DRPOTrainer(OnlineDPOTrainer):
         labels = outputs.get('labels', None)
         
         return (loss, logits, labels)
+
+    def evaluation_loop(
+        self,
+        dataloader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ):
+        """
+        Prediction/evaluation loop, shared by evaluate() and predict().
+        """
+        # Reset metrics before starting
+        self._eval_metrics_accumulator = {}
+        self._eval_metrics_count = 0
+        
+        # Run the standard evaluation loop
+        output = super().evaluation_loop(
+            dataloader,
+            description,
+            prediction_loss_only,
+            ignore_keys,
+            metric_key_prefix,
+        )
+        
+        # Add accumulated metrics to output
+        if self._eval_metrics_count > 0:
+            for key, value in self._eval_metrics_accumulator.items():
+                avg_value = value / self._eval_metrics_count
+                metric_key = f"{metric_key_prefix}_{key}" if metric_key_prefix else key
+                output.metrics[metric_key] = avg_value
+        
+        return output
 
             
     def create_model_card(

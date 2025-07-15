@@ -128,7 +128,7 @@ def main():
         
         # Evaluation and logging
         eval_strategy="steps",
-        eval_steps=100,
+        eval_steps=50,
         save_strategy="steps",
         save_steps=500,
         logging_steps=10,
