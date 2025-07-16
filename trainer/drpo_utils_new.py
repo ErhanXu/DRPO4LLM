@@ -1,6 +1,6 @@
 # drpo_utils.py
 
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -63,7 +63,7 @@ class GPMRewardHead(nn.Module):
         return rewards
 
 
-class GPMwithRewardNetwork(nn.Module):
+class GPMWrapper(nn.Module):
     """
     General Preference Model that extends beyond Bradley-Terry framework.
     
@@ -158,6 +158,7 @@ class GPMwithRewardNetwork(nn.Module):
         return rewards
 
 
+
 def get_preference_score_without_decoding(
     preference_model: nn.Module,
     input_ids_1: torch.Tensor,
@@ -165,21 +166,27 @@ def get_preference_score_without_decoding(
     input_ids_2: torch.Tensor,
     attention_mask_2: torch.Tensor,
     is_bt_model: bool = True,
+    tokenizer = None,
+    prompt_length: Optional[int] = None,
     **kwargs
 ) -> torch.Tensor:
     """
     Compute preference scores P(response_1 > response_2).
     
     Args:
-        preference_model: Either a standard reward model (BT) or GPM
+        preference_model: Either a standard reward model (BT), GPM, or PairRM
         input_ids_1/2: Token IDs for responses [batch_size, seq_len]
         attention_mask_1/2: Attention masks
         is_bt_model: Whether using Bradley-Terry model
+        is_pairrm: Whether using PairRM model
+        tokenizer: Required for PairRM to decode texts
+        prompt_length: Length of prompt tokens (for PairRM)
         
     Returns:
         Preference probabilities [batch_size]
     """
     with torch.no_grad():
+
         if is_bt_model:
             # Standard Bradley-Terry with scalar rewards
             outputs_1 = preference_model(input_ids=input_ids_1, attention_mask=attention_mask_1)

@@ -96,13 +96,18 @@ def main():
     # DRPO configuration
     training_args = DRPOConfig(
         # Basic training settings
-        output_dir="./drpo-pythia-tldr",
+        output_dir="./drpo-pythia-tldr-pairrm",
         num_train_epochs=1,
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=1,
         gradient_checkpointing=False,
-        
+
+        # PairRM config
+        use_preference_model=True,
+        preference_model_path = "llm-blender/PairRM",
+        preference_model_type="pairrm",
+
         # Learning rate and optimization
         learning_rate=5e-6,
         # lr_scheduler_type="cosine",
@@ -149,6 +154,11 @@ def main():
         fp16=False,  # Use bf16 instead
         # optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
         # per_device_train_batch_size=2 if torch.cuda.is_available() else 1,
+
+        eval_with_generation=True,
+        eval_mc_samples=1,
+        metric_for_best_model="eval_generated/win_rate_vs_rejected",
+        greater_is_better=True,
     )
     
     # Initialize trainer

@@ -153,9 +153,11 @@ class DRPOTrainer(OnlineDPOTrainer):
         # Initialize preference model if specified
         self.preference_model = None
         if args and args.use_preference_model and args.preference_model_path:
+
+
             # Import custom preference model
-            from .drpo_utils_new import GPMwithRewardNetwork
-            
+            from .drpo_utils_new import GPMWrapper
+                # GPM or BT preference model
             self.preference_model = GPMwithRewardNetwork(
                 model_name_or_path=args.preference_model_path,
                 device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -164,7 +166,7 @@ class DRPOTrainer(OnlineDPOTrainer):
                 bf16=args.bf16
             )
             # Don't use standard reward model when using custom preference model
-            reward_model = None
+            reward_model = self.preference_model
         
         # Create data collator if not provided
         if data_collator is None:
@@ -449,27 +451,10 @@ class DRPOTrainer(OnlineDPOTrainer):
         mask_2: torch.Tensor,
         texts_1: Optional[List[str]] = None,
         texts_2: Optional[List[str]] = None,
+        prompt_texts: Optional[List[str]] = None,
     ) -> torch.Tensor:
         """
         Compute preference scores g(y1, y2 | x) for a batch of comparisons.
-        
-        Supports multiple preference models:
-        1. Standard reward models with Bradley-Terry framework
-        2. Custom preference models (general preference models)
-        3. Judge-based evaluation
-        
-        Args:
-            prompt_ids: Tokenized prompts [batch_size, prompt_len]
-            prompt_mask: Attention mask for prompts
-            ids_1: Tokenized first responses [batch_size, response_len]
-            mask_1: Attention mask for first responses
-            ids_2: Tokenized second responses [batch_size, response_len]
-            mask_2: Attention mask for second responses
-            texts_1: Original text for first responses (for judge)
-            texts_2: Original text for second responses (for judge)
-            
-        Returns:
-            Preference scores [batch_size]
         """
         batch_size = prompt_ids.shape[0]
         
@@ -486,12 +471,11 @@ class DRPOTrainer(OnlineDPOTrainer):
                 
                 scores = get_preference_score_without_decoding(
                     preference_model=self.preference_model,
-                    a1_iuput_ids=prompt_response_1,
-                    a1_attention_mask=attention_mask_1,
-                    a2_input_ids=prompt_response_2,
-                    a2_attention_mask=attention_mask_2,
+                    input_ids_1=prompt_response_1,  # Fix typo: was a1_iuput_ids
+                    attention_mask_1=attention_mask_1,
+                    input_ids_2=prompt_response_2,  # Fix typo: was a2_input_ids
+                    attention_mask_2=attention_mask_2,
                     is_bt_model=(self.args.preference_model_type == "bt"),
-                    device=prompt_ids.device
                 )
                 
             elif self.reward_model is not None:
@@ -517,27 +501,36 @@ class DRPOTrainer(OnlineDPOTrainer):
             elif self.judge is not None:
                 # Use judge for evaluation
                 if texts_1 is None or texts_2 is None:
-                    raise ValueError("Judge requires original text responses")
+                    # If texts not provided, decode from token IDs
+                    texts_1 = self.processing_class.batch_decode(ids_1, skip_special_tokens=True)
+                    texts_2 = self.processing_class.batch_decode(ids_2, skip_special_tokens=True)
                 
-                # Get prompts text
-                prompts = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
+                # Get prompt texts
+                if prompt_texts is None:
+                    prompt_texts = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
                 
                 # Handle conversational format if needed
-                from ..data_utils import is_conversational
-                if any(is_conversational({"prompt": t}) for t in texts_1):
+                from trl.data_utils import is_conversational
+                if prompt_texts and any(is_conversational({"prompt": p}) for p in prompt_texts):
                     import jinja2
                     env = jinja2.Environment()
                     template = env.from_string(SIMPLE_CHAT_TEMPLATE)
-                    prompts = [template.render(messages=p) if is_conversational({"prompt": p}) else p 
-                              for p in prompts]
-                    texts_1 = [template.render(messages=t) if is_conversational({"prompt": t}) else t 
-                              for t in texts_1]
-                    texts_2 = [template.render(messages=t) if is_conversational({"prompt": t}) else t 
-                              for t in texts_2]
+                    
+                    # Apply chat template to prompts if they're conversational
+                    formatted_prompts = []
+                    for p in prompt_texts:
+                        if is_conversational({"prompt": p}):
+                            formatted_prompts.append(template.render(messages=p))
+                        else:
+                            formatted_prompts.append(p)
+                    prompt_texts = formatted_prompts
+                    
+                    # Note: texts_1 and texts_2 are completions, not full conversations
+                    # They should already be plain text, not conversational format
                 
                 # Judge returns preference probabilities
                 scores = self.judge.judge(
-                    prompts,
+                    prompt_texts,
                     list(zip(texts_1, texts_2)),
                     return_scores=True,
                 )
