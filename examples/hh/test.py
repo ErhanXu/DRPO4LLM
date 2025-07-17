@@ -16,7 +16,6 @@ from peft import LoraConfig, TaskType
 import wandb
 from trl import PairRMJudge
 
-
 # 1. Set up configuration
 model_name_or_path = "Qwen/Qwen3-1.7B"  # Base model path
 config = DRPOConfig(
@@ -61,12 +60,12 @@ config = DRPOConfig(
     # Dataset processing
     max_prompt_length=512,
     max_completion_length=256,
-    dataset_num_proc=1,
+    dataset_num_proc=4,
     
     # Evaluation
     eval_with_generation=True,
     eval_mc_samples=1,
-    metric_for_best_model="eval_generated/win_rate_vs_rejected",
+    metric_for_best_model="eval_generated/win_rate_vs_chosen",
     greater_is_better=True,
     
     # Memory optimization
@@ -94,6 +93,9 @@ judge = PairRMJudge()
 
 # 3. Load and prepare dataset
 print("Loading dataset...")
+
+import torch.multiprocessing as mp
+mp.set_start_method("spawn", force=True)
 # Example using Anthropic HH dataset
 dataset = load_dataset("Anthropic/hh-rlhf", split="train[:1000]")  # Use subset for testing
 
