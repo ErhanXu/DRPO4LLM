@@ -100,19 +100,41 @@ dataset = load_dataset("Anthropic/hh-rlhf", split="train[:1000]")  # Use subset 
 # The dataset should have 'prompt', 'chosen', and 'rejected' columns
 # If your dataset has different column names, rename them:
 def prepare_dataset(example):
+    # Parse the conversation from the chosen field
+    chosen_text = example["chosen"]
+    rejected_text = example["rejected"]
+    
+    # Find the last "Assistant:" in the chosen text to split prompt from response
+    last_assistant_idx = chosen_text.rfind("\n\nAssistant: ")
+    if last_assistant_idx == -1:
+        raise ValueError("Could not find Assistant response in chosen text")
+    
+    # Extract prompt (everything before the last assistant response)
+    prompt = chosen_text[:last_assistant_idx + len("\n\nAssistant: ")]
+    
+    # Extract the chosen response (everything after the last "Assistant: ")
+    chosen_response = chosen_text[last_assistant_idx + len("\n\nAssistant: "):].strip()
+    
+    # Extract the rejected response 
+    # (Find the same position in rejected text and get everything after)
+    rejected_last_idx = rejected_text.rfind("\n\nAssistant: ")
+    rejected_response = rejected_text[rejected_last_idx + len("\n\nAssistant: "):].strip()
+    
     return {
-        "prompt": example["chosen"][:-1],  # Remove assistant's response
-        "chosen": example["chosen"][-1]["content"],  # Extract assistant response
-        "rejected": example["rejected"][-1]["content"],
+        "prompt": prompt,
+        "chosen": chosen_response,
+        "rejected": rejected_response,
     }
 
-# For datasets that need formatting
-if "chosen" in dataset.column_names and isinstance(dataset[0]["chosen"], list):
-    dataset = dataset.map(prepare_dataset)
+# Apply the transformation
+dataset = dataset.map(prepare_dataset)
 
 # Split into train/eval
 train_dataset = dataset.select(range(900))
 eval_dataset = dataset.select(range(900, 1000))
+
+print("Example after transformation:")
+print(train_dataset[0])
 
 # 4. Initialize trainer
 print("Initializing DRPO trainer with PairRM...")
