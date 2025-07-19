@@ -104,7 +104,7 @@ peft_config = LoraConfig(
     lora_dropout=0.05,
     target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
                     "gate_proj", "up_proj", "down_proj"],
-    modules_to_save=["embed_tokens", "lm_head"],
+    # modules_to_save=["embed_tokens", "lm_head"],
 )
 
 # IMPORTANT: Process dataset BEFORE loading models to avoid CUDA issues
@@ -162,16 +162,13 @@ print("Loading models...")
 model = AutoModelForCausalLM.from_pretrained(
     model_name_or_path,
     torch_dtype=torch.bfloat16,
-    device_map="auto",  # Let it handle device placement
     use_cache=False,  # Disable KV cache for training
-    attn_implementation="flash_attention_2" if torch.cuda.get_device_capability()[0] >= 8 else "eager",
 )
 
 # Load reward model
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     reward_model_path,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
     use_cache=False,
 )
 
