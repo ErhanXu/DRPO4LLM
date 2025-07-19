@@ -62,7 +62,7 @@ config = DRPOConfig(
     weight_decay=0.01,
     
     # DeepSpeed integration
-    deepspeed="deepspeed_config.json",  # Will create this
+    # deepspeed="deepspeed_config.json",  # Will create this
     
     # Logging and saving
     logging_steps=50,
