@@ -1,30 +1,48 @@
-# drpo_trainer_new.py (Refactored and Unified)
-import os
-import textwrap
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from accelerate import PartialState
-from datasets import Dataset
+from datasets import Dataset, IterableDataset
 from torch.utils.data import DataLoader
 from transformers import (
+    BaseImageProcessor,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
+    TrainerCallback,
     is_wandb_available,
 )
-from transformers.trainer_utils import seed_worker
+from transformers.trainer_utils import EvalPrediction, seed_worker
+from transformers.utils import is_peft_available
 
+# Import parent class and utilities
 from trl import OnlineDPOTrainer, BasePairwiseJudge
+from trl.data_utils import is_conversational
 from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.utils import pad, selective_log_softmax, truncate_right, empty_cache
+from trl.trainer.utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    pad,
+    selective_log_softmax,
+    truncate_right
+)
 
-from .drpo_config_new import DRPOConfig
+from .drpo_config import DRPOConfig
 from .drpo_utils_new import get_preference_score_without_decoding, GPMWrapper
 
+# Optional imports
 if is_wandb_available():
     import wandb
+
+if is_peft_available():
+    from peft import PeftModel
+
+
 
 
 
