@@ -26,6 +26,8 @@ from .drpo_utils_new import get_preference_score_without_decoding, GPMWrapper
 if is_wandb_available():
     import wandb
 
+
+
 class DRPODataCollatorWithPadding:
     """Data collator for DRPO training."""
     def __init__(self, pad_token_id: int):
@@ -61,8 +63,27 @@ class DRPOTrainer(OnlineDPOTrainer):
     """
     _tag_names = ["trl", "drpo"]
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        ref_model: Union[PreTrainedModel, nn.Module, None] = None,
+        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        judge: Optional[BasePairwiseJudge] = None,
+        args: Optional[DRPOConfig] = None,
+        data_collator: Optional[Callable] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+    ) -> None:
+        # Store model configuration before potential DeepSpeed wrapping
+        self._is_encoder_decoder = getattr(model.config, 'is_encoder_decoder', False) if hasattr(model, 'config') else False
         
         # Correctly initialize the preference model
         self.preference_model = None
