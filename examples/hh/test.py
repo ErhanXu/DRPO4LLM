@@ -18,6 +18,17 @@ from trl import PairRMJudge
 
 # 1. Set up configuration
 model_name_or_path = "Qwen/Qwen3-1.7B"  # Base model path
+reward_model_name_or_path = "Kyleyee/Qwen2.5-1.5B-reward-hh-retrain"  # Reward model path, can be same as base model
+peft_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=64,                              # Higher rank for better performance
+    lora_alpha=128,
+    lora_dropout=0.05,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
+                    "gate_proj", "up_proj", "down_proj"],
+    modules_to_save=["embed_tokens", "lm_head"],
+)
+
 config = DRPOConfig(
     # Model configuration
     # model_name_or_path="Qwen/Qwen3-1.7B",  # Your base model
@@ -60,7 +71,7 @@ config = DRPOConfig(
     # Dataset processing
     max_prompt_length=512,
     max_completion_length=256,
-    dataset_num_proc=4,
+    dataset_num_proc=1,
     
     # Evaluation
     eval_with_generation=True,
@@ -77,7 +88,6 @@ print("Loading model and tokenizer...")
 model = AutoModelForCausalLM.from_pretrained(
     model_name_or_path,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
     use_cache=False if config.gradient_checkpointing else True,
 )
 
@@ -86,16 +96,21 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
-from trl import PairRMJudge
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+    reward_model_name_or_path,
+    torch_dtype=torch.bfloat16,
+    use_cache=False if config.gradient_checkpointing else True,
+)
 
-judge = PairRMJudge()
+
+# judge = PairRMJudge()
 
 
 # 3. Load and prepare dataset
 print("Loading dataset...")
 
-import torch.multiprocessing as mp
-mp.set_start_method("spawn", force=True)
+# import torch.multiprocessing as mp
+# mp.set_start_method("spawn", force=True)
 # Example using Anthropic HH dataset
 dataset = load_dataset("Anthropic/hh-rlhf", split="train[:1000]")  # Use subset for testing
 
@@ -143,11 +158,12 @@ print("Initializing DRPO trainer with PairRM...")
 trainer = DRPOTrainer(
     model=model,
     ref_model=None,  # Will create from model automatically
-    judge=judge,
+    reward_model=reward_model,
     args=config,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     processing_class=tokenizer,
+    peft_config=peft_config
 )
 
 # 5. Train the model
