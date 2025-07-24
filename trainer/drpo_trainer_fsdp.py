@@ -23,6 +23,7 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import is_peft_available
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.cuda.amp import autocast
 
 # Import parent class and utilities
 from trl import OnlineDPOTrainer, BasePairwiseJudge
@@ -611,35 +612,37 @@ class DRPOTrainer(OnlineDPOTrainer):
 
     def _generate(self, model: nn.Module, prompt_ids: torch.Tensor, prompt_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generates completions, explicitly handling FSDP parameter gathering.
+        Generates completions, explicitly handling FSDP parameter gathering and mixed precision.
         """
-        # Determine if the model is wrapped with FSDP
         is_fsdp = isinstance(model, FSDP)
+        
+        # Define the autocast context based on your training arguments.
+        # This ensures that operations inside the 'with' block run in mixed precision.
+        autocast_context = autocast(dtype=torch.bfloat16, enabled=self.args.bf16)
 
-        # Explicitly use FSDP.summon_full_params to gather the sharded weights for generation
-        if is_fsdp:
-            # This context manager gathers the full parameters on each rank, making the model
-            # temporarily behave like a standard, non-sharded model.
-            with FSDP.summon_full_params(model, writeback=False, offload_to_cpu=False):
-                output_ids = model.generate(
-                    input_ids=prompt_ids,
-                    attention_mask=prompt_mask,
-                    generation_config=self.generation_config,
-                    pad_token_id=self.processing_class.pad_token_id,
-                    eos_token_id=self.processing_class.eos_token_id,
-                    do_sample=True,
-                )
-        else:
-            # Standard generation for non-FSDP cases (e.g., single GPU)
-            with torch.no_grad():
-                 output_ids = model.generate(
-                    input_ids=prompt_ids,
-                    attention_mask=prompt_mask,
-                    generation_config=self.generation_config,
-                    pad_token_id=self.processing_class.pad_token_id,
-                    eos_token_id=self.processing_class.eos_token_id,
-                    do_sample=True,
-                )
+        with autocast_context:
+            if is_fsdp:
+                # The FSDP.summon_full_params context gathers the sharded model weights
+                with FSDP.summon_full_params(model, writeback=False, offload_to_cpu=False):
+                    output_ids = model.generate(
+                        input_ids=prompt_ids,
+                        attention_mask=prompt_mask,
+                        generation_config=self.generation_config,
+                        pad_token_id=self.processing_class.pad_token_id,
+                        eos_token_id=self.processing_class.eos_token_id,
+                        do_sample=True,
+                    )
+            else:
+                # Standard generation for non-FSDP cases
+                with torch.no_grad():
+                     output_ids = model.generate(
+                        input_ids=prompt_ids,
+                        attention_mask=prompt_mask,
+                        generation_config=self.generation_config,
+                        pad_token_id=self.processing_class.pad_token_id,
+                        eos_token_id=self.processing_class.eos_token_id,
+                        do_sample=True,
+                    )
 
         # Extract, truncate, and create mask for the generated completion
         completion_ids = output_ids[:, prompt_ids.size(1):]
@@ -647,6 +650,7 @@ class DRPOTrainer(OnlineDPOTrainer):
             completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         return completion_ids, completion_mask
+
 
     # REFACTORED: Helper for batched forward passes
     def _batched_forward_pass(
