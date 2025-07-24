@@ -68,7 +68,7 @@ training_config = DRPOConfigFSDP(
     # Optimizations
     bf16=True,
     fp16=False,  # Use bf16 for FSDP
-    tf32=True,
+    # tf32=True,
     gradient_checkpointing=True,
     gradient_checkpointing_kwargs={"use_reentrant": False},  # Use non-reentrant for FSDP
     optim="adamw_torch_fused",  # Fused optimizer for speed
@@ -120,7 +120,7 @@ peft_config = LoraConfig(
 
 print("Loading and preparing dataset...")
 # Dataset preparation (same as before)
-dataset = load_dataset("Anthropic/hh-rlhf", split="train")
+dataset = load_dataset("Anthropic/hh-rlhf", split="train[:10000]")
 eval_dataset = load_dataset("Anthropic/hh-rlhf", split="test[:1000]")
 
 def prepare_dataset(example):
