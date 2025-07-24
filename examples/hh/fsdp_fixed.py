@@ -13,7 +13,7 @@ from transformers import (
     AutoConfig,
 )
 # CHANGE 1: Import the unified trainer and its config
-from trainer.drpo_trainer_new import DRPOTrainer
+from trainer.drpo_trainer_fsdp import DRPOTrainer
 from trainer.drpo_config_fsdp import DRPOConfigFSDP
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 
