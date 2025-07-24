@@ -27,7 +27,7 @@ accelerator = Accelerator()
 
 # Model paths
 model_name_or_path = "Qwen/Qwen2.5-1.5B"  # Base model path
-reward_model_name_or_path = "Kyleyee/Qwen2.5-1.5B-reward-hh-retrain"  # Reward model path, can be same as base model
+reward_model_path = "Kyleyee/Qwen2.5-1.5B-reward-hh-retrain"  # Reward model path, can be same as base model
 
 
 # SwanLab callback
