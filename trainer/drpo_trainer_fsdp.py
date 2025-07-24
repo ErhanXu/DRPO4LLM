@@ -655,7 +655,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         return logprobs, ref_logprobs
 
     # REFACTORED: Unified and highly efficient training_step
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None,) -> torch.Tensor:
         """
         Performs a single, unified DRPO training step with batched forward passes for efficiency.
         """
