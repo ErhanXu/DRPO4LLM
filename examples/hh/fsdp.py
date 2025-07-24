@@ -92,7 +92,7 @@ training_config = DRPOConfigFSDP(
     eval_mc_samples=1,
     metric_for_best_model="eval_generated/win_rate_vs_rejected",
     
-    report_to="wandb",
+    report_to="none",
     run_name="drpo-fsdp-qwen2.5-7b",
 )
 

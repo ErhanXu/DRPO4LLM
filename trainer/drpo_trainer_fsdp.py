@@ -54,13 +54,14 @@ class DRPOTrainerFSDP(DRPOTrainer):
         
         return super().training_step(model, inputs, num_items_in_batch)
     
+# drpo_trainer_fsdp.py - Fixed _generate method
     def _generate(self, model, prompt_ids, prompt_mask, num_samples=1):
-        """FSDP-aware generation with proper dtype handling."""
-        # Store training mode
+        """FSDP-aware generation with proper parameter gathering."""
+        # Store original states
         was_training = model.training
-        
-        # Disable gradient checkpointing for generation
         grad_ckpt_enabled = False
+        
+        # Check if gradient checkpointing is enabled
         if hasattr(model, 'is_gradient_checkpointing') and model.is_gradient_checkpointing:
             grad_ckpt_enabled = True
             model.gradient_checkpointing_disable()
@@ -70,23 +71,38 @@ class DRPOTrainerFSDP(DRPOTrainer):
         
         try:
             with torch.no_grad():
-                # FSDP-specific generation handling
+                # Check if we're using FSDP
                 if self.accelerator.distributed_type == "FSDP":
                     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+                    from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload, BackwardPrefetch
                     
-                    # Check if model is wrapped in FSDP
-                    is_fsdp_model = isinstance(model, FSDP) or any(
-                        isinstance(module, FSDP) for module in model.modules()
-                    )
+                    # Find the actual FSDP wrapped model
+                    fsdp_model = model
                     
-                    if is_fsdp_model:
-                        # Use summon_full_params for generation
+                    # Check if the model or any of its submodules is wrapped with FSDP
+                    is_fsdp = isinstance(model, FSDP)
+                    if not is_fsdp:
+                        # Check if any submodule is FSDP wrapped
+                        for module in model.modules():
+                            if isinstance(module, FSDP):
+                                is_fsdp = True
+                                break
+                    
+                    if is_fsdp:
+                        # Use FSDP's context manager to gather full parameters
                         with FSDP.summon_full_params(model, writeback=False, recurse=True):
-                            # Use autocast to ensure consistent dtype
+                            # Ensure all parameters are gathered
+                            for module in model.modules():
+                                if hasattr(module, 'weight'):
+                                    # Force parameter to be contiguous
+                                    if hasattr(module.weight, 'data'):
+                                        module.weight.data = module.weight.data.contiguous()
+                            
+                            # Now generate with full parameters
                             with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
                                 return super()._generate(model, prompt_ids, prompt_mask, num_samples)
                     else:
-                        # Model not wrapped in FSDP yet
+                        # Model not FSDP wrapped, generate normally
                         with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
                             return super()._generate(model, prompt_ids, prompt_mask, num_samples)
                 else:
