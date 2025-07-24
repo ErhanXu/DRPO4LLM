@@ -111,7 +111,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         # Correctly initialize the preference model
         self.preference_model = None
-        if self.args.use_preference_model and self.args.preference_model_path:
+        if args and args.use_preference_model and args.preference_model_path:
             # FIX: Use GPMWrapper class name correctly
             self.preference_model = GPMWrapper(
                 model_name_or_path=self.args.preference_model_path,
@@ -128,8 +128,8 @@ class DRPOTrainer(OnlineDPOTrainer):
             
             reward_model= self.preference_model  # Use the GPMWrapper as the reward model
         
-        if self.data_collator is None:
-            self.data_collator = DRPODataCollatorWithPadding(pad_token_id=self.processing_class.pad_token_id)
+        if data_collator is None:
+            data_collator = DRPODataCollatorWithPadding(pad_token_id=self.processing_class.pad_token_id)
 
 
         super().__init__(
