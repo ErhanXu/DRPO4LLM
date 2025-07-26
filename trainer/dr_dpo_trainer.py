@@ -6,18 +6,15 @@ from torch.cuda.amp import autocast
 
 from transformers import PreTrainedModel
 from trl import DPOTrainer, DPOConfig
+from datasets import load_dataset
 
 
 class DrDPOTrainer(DPOTrainer):
     """
     Dr. DPO (Distributionally Robustifying DPO) Trainer.
     
-    This trainer implements the Dr. DPO algorithm from "Towards Robust Alignment of Language Models:
-    Distributionally Robustifying Direct Preference Optimization" which enhances DPO's robustness 
-    to both pointwise and pairwise noise in preference datasets.
-    
-    Dr. DPO applies a soft-minimum aggregation over the batch losses instead of the arithmetic mean,
-    which makes it more robust to noisy preference pairs.
+    Implements the Dr. DPO algorithm from "Towards Robust Alignment of Language Models:
+    Distributionally Robustifying Direct Preference Optimization".
     """
     
     def __init__(
@@ -42,19 +39,11 @@ class DrDPOTrainer(DPOTrainer):
         
         Args:
             beta_prime (`float`, *optional*, defaults to `1.0`):
-                The β' parameter that controls the balance between exploration and exploitation:
-                - β' < 1.0: More conservative (focuses on low-loss samples, robust to noise)
-                - β' = 1.0: Default balanced behavior  
-                - β' > 1.0: More explorative (considers all samples more equally)
-                - β' → 0: Approaches min(losses) 
-                - β' → ∞: Approaches mean(losses) (standard DPO)
-            
-        All other parameters are the same as DPOTrainer.
+                The β' parameter that controls robustness to pairwise noise.
+                Lower values make the loss more conservative (robust to noise).
         """
-        # Store beta_prime before calling super().__init__
         self.beta_prime = beta_prime
         
-        # Call parent constructor
         super().__init__(
             model=model,
             ref_model=ref_model,
@@ -71,114 +60,43 @@ class DrDPOTrainer(DPOTrainer):
             peft_config=peft_config,
         )
     
-    def compute_loss(
+    def dpo_loss(
         self,
-        model: Union[PreTrainedModel, torch.nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        return_outputs: bool = False,
-        num_items_in_batch: Optional[int] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, float]]]:
+        chosen_logps: torch.FloatTensor,
+        rejected_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        loss_type: str = "sigmoid",
+        model_output: Optional[Dict[str, torch.FloatTensor]] = None,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
-        Override compute_loss to apply Dr. DPO transformation to the final loss.
+        Compute the Dr. DPO loss for a batch of policy and reference model log probabilities.
         
-        The Dr. DPO loss aggregation is:
-        L_Dr.DPO = -β' * log(mean(exp(-losses / β')))
-        
-        This is a soft minimum that:
-        - Gives higher weight to samples with lower loss (likely correct preferences)
-        - Gives lower weight to samples with higher loss (likely noisy preferences)
-        - Smoothly interpolates between min (β'→0) and mean (β'→∞)
+        Dr. DPO applies a transformation that makes the loss robust to pairwise noise by
+        implicitly reweighting samples based on their loss values.
         """
-        # Get the compute loss context manager (for mixed precision training)
-        compute_loss_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        # First compute standard DPO losses and rewards
+        losses, chosen_rewards, rejected_rewards = super().dpo_loss(
+            chosen_logps=chosen_logps,
+            rejected_logps=rejected_logps,
+            ref_chosen_logps=ref_chosen_logps,
+            ref_rejected_logps=ref_rejected_logps,
         )
         
-        with compute_loss_context_manager:
-            # Get per-sample losses and metrics using the parent class method
-            losses, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
-            
-            # Apply Dr. DPO transformation
-            # Using logsumexp for numerical stability:
-            # log(mean(exp(x))) = log(sum(exp(x))) - log(N)
-            # = logsumexp(x) - log(N)
-            dr_dpo_loss = -self.beta_prime * (
-                torch.logsumexp(-losses / self.beta_prime, dim=0) 
-                - torch.log(torch.tensor(losses.shape[0], dtype=losses.dtype, device=losses.device))
-            )
+        # Apply Dr. DPO transformation
+        # The Dr. DPO paper shows that the gradient can be written as:
+        # ∇L_Dr.DPO = E[w(x,y_w,y_l) * ∇L_DPO(x,y_w,y_l)]
+        # where w(x,y_w,y_l) = exp(-L_DPO(x,y_w,y_l) / β') / E[exp(-L_DPO / β')]
         
-        # Check if we need to move the loss to a different device
-        # In DPOTrainer, losses are already on the correct device from get_batch_loss_metrics
-        # But we ensure it's on args.device for consistency with the parent class
-        if hasattr(self.args, 'device') and dr_dpo_loss.device != self.args.device:
-            dr_dpo_loss = dr_dpo_loss.to(self.args.device)
+        # Compute importance weights for each sample
+        weights = torch.exp(-losses.detach() / self.beta_prime)
+        weights = weights / weights.mean()
         
-        # Store metrics for logging
-        self.store_metrics(metrics, train_eval="train")
+        # Apply weights to losses
+        # This gives the same gradient as the original Dr. DPO formulation
+        dr_dpo_losses = losses * weights
         
-        # Add Dr. DPO specific metric
-        metrics['beta_prime'] = self.beta_prime
-        
-        if return_outputs:
-            return dr_dpo_loss, metrics
-        
-        return dr_dpo_loss
-    
-    def evaluation_loop(
-        self,
-        dataloader,
-        description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
-        metric_key_prefix: str = "eval",
-    ):
-        """
-        Override evaluation_loop to apply Dr. DPO transformation during evaluation.
-        """
-        # During evaluation, we also want to use Dr. DPO aggregation
-        # We'll do this by temporarily overriding the loss computation
-        
-        # Store the original compute_loss method
-        original_compute_loss = super().compute_loss
-        
-        def eval_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
-            """Apply Dr. DPO transformation during evaluation."""
-            with torch.no_grad():
-                losses, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
-                
-                # Apply Dr. DPO transformation
-                dr_dpo_loss = -self.beta_prime * (
-                    torch.logsumexp(-losses / self.beta_prime, dim=0) 
-                    - torch.log(torch.tensor(losses.shape[0], dtype=losses.dtype, device=losses.device))
-                )
-                
-                if hasattr(self.args, 'device') and dr_dpo_loss.device != self.args.device:
-                    dr_dpo_loss = dr_dpo_loss.to(self.args.device)
-                
-                self.store_metrics(metrics, train_eval="eval")
-                
-                if return_outputs:
-                    return dr_dpo_loss, metrics
-                
-                return dr_dpo_loss
-        
-        # Temporarily replace compute_loss for evaluation
-        self.compute_loss = eval_compute_loss
-        
-        try:
-            # Call parent's evaluation_loop
-            output = super().evaluation_loop(
-                dataloader=dataloader,
-                description=description,
-                prediction_loss_only=prediction_loss_only,
-                ignore_keys=ignore_keys,
-                metric_key_prefix=metric_key_prefix,
-            )
-        finally:
-            # Restore original compute_loss
-            self.compute_loss = original_compute_loss.__get__(self, type(self))
-        
-        return output
+        return dr_dpo_losses, chosen_rewards, rejected_rewards
 
 
 # Usage example
@@ -187,17 +105,23 @@ if __name__ == "__main__":
     from datasets import Dataset
     
     # Initialize model and tokenizer
-    model_name = "gpt2"
+    model_name = "Qwen/Qwen3-1.7B"
     model = AutoModelForCausalLM.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    
+
+    from peft import LoraConfig
+    peft_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=["q_proj", "v_proj"],
+    )
+
     # Create a dummy dataset
-    dataset = Dataset.from_dict({
-        "prompt": ["Hello", "Hi there"],
-        "chosen": [" world!", " friend!"],
-        "rejected": [" earth!", " buddy!"],
-    })
+    dataset = load_dataset("Anthropic/hh-rlhf", split="train[:1000]")  # Use subset for testing
     
     # Configure training
     training_args = DPOConfig(
@@ -209,19 +133,20 @@ if __name__ == "__main__":
         save_steps=100,
         learning_rate=1e-5,
         warmup_steps=10,
-        logging_dir="./logs",
+        # logging_dir="./logs",
         beta=0.1,  # Standard DPO beta
     )
     
     # Initialize Dr. DPO trainer
     trainer = DrDPOTrainer(
         model=model,
-        ref_model=model,  # In practice, use a separate reference model
+        ref_model=None,
         args=training_args,
         beta_prime=1.0,  # Dr. DPO specific parameter
         train_dataset=dataset,
         eval_dataset=dataset,
         processing_class=tokenizer,
+        peft_config=peft_config,
     )
     
     # Train
