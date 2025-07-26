@@ -10,4 +10,5 @@ openai
 trl
 deepspeed
 peft
-llm-blender
+# llm-blender
+swanlab
