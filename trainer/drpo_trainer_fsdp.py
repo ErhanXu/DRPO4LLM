@@ -116,10 +116,10 @@ class DRPOTrainer(OnlineDPOTrainer):
         if args and args.use_preference_model and args.preference_model_path:
             # FIX: Use GPMWrapper class name correctly
             self.preference_model = GPMWrapper(
-                model_name_or_path=self.args.preference_model_path,
-                pad_token_id=self.processing_class.pad_token_id,
-                is_general_preference=(self.args.preference_model_type == "general"),
-                bf16=self.args.bf16
+                model_name_or_path=args.preference_model_path,
+                pad_token_id=processing_class.pad_token_id,
+                is_general_preference=(args.preference_model_type == "general"),
+                bf16=args.bf16
             )
             # Ensure the preference model is on the correct device and not wrapped by FSDP
             if self.preference_model is not None:
@@ -610,46 +610,60 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         return logprobs
 
-    def _generate(self, model: nn.Module, prompt_ids: torch.Tensor, prompt_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _generate(
+        self, 
+        model: nn.Module,
+        prompt_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        num_samples: int = 1
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Generates completions, explicitly handling FSDP parameter gathering and mixed precision.
+        Generate completions from tokenized prompts.
+        Returns: (prompt_ids, prompt_mask, completion_ids, completion_mask)
         """
-        is_fsdp = isinstance(model, FSDP)
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
         
-        # Define the autocast context based on your training arguments.
-        # This ensures that operations inside the 'with' block run in mixed precision.
+        # Handle multiple samples per prompt if needed
+        if num_samples > 1:
+            prompt_ids = prompt_ids.repeat(num_samples, 1)
+            prompt_mask = prompt_mask.repeat(num_samples, 1)
+        
+        is_fsdp = isinstance(model, FSDP)
         autocast_context = autocast(dtype=torch.bfloat16, enabled=self.args.bf16)
 
-        with autocast_context:
-            if is_fsdp:
-                # The FSDP.summon_full_params context gathers the sharded model weights
-                with FSDP.summon_full_params(model, writeback=False, offload_to_cpu=False):
+        with torch.no_grad():
+            with autocast_context:
+                if is_fsdp:
+                    with FSDP.summon_full_params(model, writeback=False, offload_to_cpu=False):
+                        output_ids = model.generate(
+                            input_ids=prompt_ids,
+                            attention_mask=prompt_mask,
+                            generation_config=self.generation_config,
+                            pad_token_id=pad_token_id,
+                            eos_token_id=eos_token_id,
+                            do_sample=True,
+                        )
+                else:
                     output_ids = model.generate(
                         input_ids=prompt_ids,
                         attention_mask=prompt_mask,
                         generation_config=self.generation_config,
-                        pad_token_id=self.processing_class.pad_token_id,
-                        eos_token_id=self.processing_class.eos_token_id,
-                        do_sample=True,
-                    )
-            else:
-                # Standard generation for non-FSDP cases
-                with torch.no_grad():
-                     output_ids = model.generate(
-                        input_ids=prompt_ids,
-                        attention_mask=prompt_mask,
-                        generation_config=self.generation_config,
-                        pad_token_id=self.processing_class.pad_token_id,
-                        eos_token_id=self.processing_class.eos_token_id,
+                        pad_token_id=pad_token_id,
+                        eos_token_id=eos_token_id,
                         do_sample=True,
                     )
 
-        # Extract, truncate, and create mask for the generated completion
+        # Extract only the generated tokens
         completion_ids = output_ids[:, prompt_ids.size(1):]
+        
+        # Truncate and create masks
         completion_ids, completion_mask = truncate_right(
-            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
+            completion_ids, eos_token_id, pad_token_id
         )
-        return completion_ids, completion_mask
+        
+        # Return all 4 values as expected
+        return prompt_ids, prompt_mask, completion_ids, completion_mask
 
 
     # REFACTORED: Helper for batched forward passes
@@ -694,27 +708,37 @@ class DRPOTrainer(OnlineDPOTrainer):
         batch_size = prompt_ids.shape[0]
 
         # 1. Generate all Monte Carlo samples
-        mc_samples = [self._generate(model, prompt_ids, prompt_mask) for _ in range(self.args.num_monte_carlo_samples)]
-        mc_ids_list, mc_mask_list = zip(*mc_samples)
+        mc_samples = []
+        for _ in range(self.args.num_monte_carlo_samples):
+            _, _, mc_ids, mc_mask = self._generate(model, prompt_ids, prompt_mask)
+            mc_samples.append((mc_ids.to(device), mc_mask.to(device)))
         
-        # 2. Batch all completions for a single forward pass
-        # This is the core performance optimization
-        all_completion_ids = torch.cat([chosen_ids, rejected_ids] + list(mc_ids_list), dim=0)
-        all_completion_masks = torch.cat([chosen_mask, rejected_mask] + list(mc_mask_list), dim=0)
+        # Separate ids and masks for easier handling
+        mc_ids_list = [ids for ids, _ in mc_samples]
+        mc_mask_list = [mask for _, mask in mc_samples]
         
-        # Repeat prompts to match the large batch size
+        # 2. Batch all completions for forward passes
+        all_completion_ids = torch.cat([chosen_ids, rejected_ids] + mc_ids_list, dim=0)
+        all_completion_masks = torch.cat([chosen_mask, rejected_mask] + mc_mask_list, dim=0)
+        
+        # Repeat prompts to match
         num_total_samples = 2 + self.args.num_monte_carlo_samples
         all_prompt_ids = prompt_ids.repeat(num_total_samples, 1)
         all_prompt_mask = prompt_mask.repeat(num_total_samples, 1)
 
-        # 3. Perform batched forward passes
+        # 3. Batched forward passes
         all_logprobs, all_ref_logprobs = self._batched_forward_pass(
-            model, self.ref_model, all_prompt_ids, all_prompt_mask, all_completion_ids, all_completion_masks
+            model, self.ref_model, all_prompt_ids, all_prompt_mask, 
+            all_completion_ids, all_completion_masks
         )
         
-        # 4. Split the results back
-        chosen_logprobs, rejected_logprobs, *mc_logprobs_list = torch.chunk(all_logprobs, num_total_samples)
-        chosen_ref_logprobs, rejected_ref_logprobs, *mc_ref_logprobs_list = torch.chunk(all_ref_logprobs, num_total_samples)
+        # 4. Split results
+        chosen_logprobs, rejected_logprobs, *mc_logprobs_list = torch.chunk(
+            all_logprobs, num_total_samples, dim=0
+        )
+        chosen_ref_logprobs, rejected_ref_logprobs, *mc_ref_logprobs_list = torch.chunk(
+            all_ref_logprobs, num_total_samples, dim=0
+        )       
         
         # 5. Compute preference scores
         g_chosen_rejected = self._compute_preference_scores_batch(
@@ -746,12 +770,16 @@ class DRPOTrainer(OnlineDPOTrainer):
         drpo_loss = -term_dm.mean() + is_loss
         
         # 7. Compute KL Loss from MC samples
+        mc_entropy_list = []
         mc_kl_total_list = []
         for i in range(self.args.num_monte_carlo_samples):
             _, total_kl = self._compute_kl_divergence(
                 mc_logprobs_list[i], mc_ref_logprobs_list[i], mc_mask_list[i], kl_type=self.args.kl_type
             )
             mc_kl_total_list.append(total_kl)
+
+            entropy = -(mc_logprobs_list[i] * mc_mask_list[i]).sum(dim=1)
+            mc_entropy_list.append(entropy)
 
         kl_loss = torch.stack(mc_kl_total_list).mean()
         

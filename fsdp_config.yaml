@@ -1,4 +1,3 @@
-# accelerate_config_fsdp.yaml
 compute_environment: LOCAL_MACHINE
 debug: false
 distributed_type: FSDP
@@ -9,16 +8,19 @@ fsdp_config:
   fsdp_cpu_ram_efficient_loading: true
   fsdp_forward_prefetch: false
   fsdp_offload_params: false
-  fsdp_sharding_strategy: FULL_SHARD
+  fsdp_sharding_strategy: SHARD_GRAD_OP  # Similar to DeepSpeed ZeRO-2
   fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_sync_module_states: true
-  fsdp_transformer_layer_cls_to_wrap: Qwen2DecoderLayer
-  fsdp_use_orig_params: true  # CRITICAL for PEFT
+  fsdp_transformer_layer_cls_to_wrap: Qwen2DecoderLayer  # Change based on model
+  fsdp_use_orig_params: true  # CRITICAL for PEFT compatibility
 machine_rank: 0
 main_training_function: main
 mixed_precision: bf16
 num_machines: 1
-num_processes: 2
+num_processes: 2  # Adjust based on your GPU count
 rdzv_backend: static
 same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
 use_cpu: false
