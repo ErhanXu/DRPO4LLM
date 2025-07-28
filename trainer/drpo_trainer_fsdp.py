@@ -716,10 +716,14 @@ class DRPOTrainer(OnlineDPOTrainer):
         # Separate ids and masks for easier handling
         mc_ids_list = [ids for ids, _ in mc_samples]
         mc_mask_list = [mask for _, mask in mc_samples]
+
+
         
-        # 2. Batch all completions for forward passes
-        all_completion_ids = torch.cat([chosen_ids, rejected_ids] + mc_ids_list, dim=0)
-        all_completion_masks = torch.cat([chosen_mask, rejected_mask] + mc_mask_list, dim=0)
+        # 2. Batch all completions, and pad for forward passes
+        all_completion_ids = pad([chosen_ids, rejected_ids] + mc_ids_list, padding_value=self.processing_class.pad_token_id, padding_side="right")
+        all_completion_masks = pad([chosen_mask, rejected_mask] + mc_mask_list, padding_value=0, padding_side="right") 
+        # all_completion_ids = torch.cat([chosen_ids, rejected_ids] + mc_ids_list, dim=0)
+        # all_completion_masks = torch.cat([chosen_mask, rejected_mask] + mc_mask_list, dim=0)
         
         # Repeat prompts to match
         num_total_samples = 2 + self.args.num_monte_carlo_samples
