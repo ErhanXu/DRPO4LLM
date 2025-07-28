@@ -132,8 +132,8 @@ else:
 # PEFT LoRA configuration
 peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
-    r=64,  # LoRA rank
-    lora_alpha=128,  # LoRA alpha
+    r=8,  # LoRA rank
+    lora_alpha=16,  # LoRA alpha
     lora_dropout=0.05,
     target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
                     "gate_proj", "up_proj", "down_proj"],
