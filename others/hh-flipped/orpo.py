@@ -131,7 +131,7 @@ def train_model(model_args: ModelConfig, script_args: ScriptArguments, training_
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split].select(range(1000)) if training_args.eval_strategy != "no" else None,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
     
