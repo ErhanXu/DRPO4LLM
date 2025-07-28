@@ -79,9 +79,9 @@ training_config = DRPOConfig(
     greater_is_better=True,
     
     # Dataset processing
-    dataset_num_proc=4,  # Use multiple CPU cores
-    dataloader_num_workers=2,
-    dataloader_pin_memory=True,
+    dataset_num_proc=1,  # Use multiple CPU cores
+    # dataloader_num_workers=2,
+    # dataloader_pin_memory=True,
     
     # Memory optimization
     torch_empty_cache_steps=50,
