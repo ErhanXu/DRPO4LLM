@@ -77,11 +77,11 @@ training_config = DRPOConfig(
     
     # Logging and saving
     logging_steps=10,
-    save_strategy="steps",
+    save_strategy="no",
     save_steps=500,
     save_total_limit=2,
-    eval_strategy="steps",
-    eval_steps=1,
+    eval_strategy="no",
+    eval_steps=100,
     load_best_model_at_end=True,
     metric_for_best_model="eval_generated/win_rate_vs_chosen",
     greater_is_better=True,
@@ -132,12 +132,12 @@ def main():
     
     print("Loading and preparing dataset...")
     # Load dataset
-    train_dataset = load_dataset(DATASET_NAME, split="train[:10000]")  # Using subset for demo
-    eval_dataset = load_dataset(DATASET_NAME, split="test[:1000]")
-
+    train_dataset = load_dataset(DATASET_NAME, split="train")  # Using subset for demo
+    # eval_dataset = load_dataset(DATASET_NAME, split="test[:1000]")
+    eval_dataset = None
     
     print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Eval dataset size: {len(eval_dataset)}")
+    # print(f"Eval dataset size: {len(eval_dataset)}")
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -155,7 +155,7 @@ def main():
         torch_dtype=torch.bfloat16,
         use_cache=False,  # Disable KV cache for training
         trust_remote_code=True,
-        attn_implementation="sdpa",  # Use scaled dot product attention
+        attn_implementation="eager",  # Use scaled dot product attention
     )
     
     # # Apply LoRA
