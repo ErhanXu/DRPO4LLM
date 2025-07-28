@@ -780,7 +780,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         mc_ids_list = [ids for ids, _ in mc_samples]
         mc_mask_list = [mask for _, mask in mc_samples]
 
-        
+
         def pad_to_same_length(tensor_list, pad_value, padding_side="right"):
             """Pad a list of 2D tensors to the same length and return them as a list."""
             max_len = max(t.shape[1] for t in tensor_list)
@@ -814,6 +814,12 @@ class DRPOTrainer(OnlineDPOTrainer):
         num_total_samples = len(padded_sequences)
         all_prompt_ids = prompt_ids.repeat(num_total_samples, 1)
         all_prompt_mask = prompt_mask.repeat(num_total_samples, 1)
+
+        # 3. Batched forward passes
+        all_logprobs, all_ref_logprobs = self._batched_forward_pass(
+            model, self.ref_model, all_prompt_ids, all_prompt_mask, 
+            all_completion_ids, all_completion_masks
+        )
         
         # 4. Split results
         chosen_logprobs, rejected_logprobs, *mc_logprobs_list = torch.chunk(
