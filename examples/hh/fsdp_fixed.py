@@ -142,50 +142,50 @@ peft_config = LoraConfig(
 
 # Load and prepare dataset
 print("Loading and preparing dataset...")
-dataset = load_dataset("Anthropic/hh-rlhf", split="train")
-eval_dataset = load_dataset("Anthropic/hh-rlhf", split="test[:2000]")
+dataset = load_dataset("Eehan/train_data_hh", split="train")
+eval_dataset = load_dataset("Eehan/train_data_hh", split="test[:2000]")
 
-def prepare_dataset(example):
-    """Extract prompt and chosen/rejected responses from HH-RLHF format."""
-    chosen_text = example["chosen"]
-    rejected_text = example["rejected"]
+# def prepare_dataset(example):
+#     """Extract prompt and chosen/rejected responses from HH-RLHF format."""
+#     chosen_text = example["chosen"]
+#     rejected_text = example["rejected"]
     
-    # Find the last Human/Assistant exchange
-    last_human_idx = chosen_text.rfind("\n\nHuman: ")
-    last_assistant_idx = chosen_text.rfind("\n\nAssistant: ")
+#     # Find the last Human/Assistant exchange
+#     last_human_idx = chosen_text.rfind("\n\nHuman: ")
+#     last_assistant_idx = chosen_text.rfind("\n\nAssistant: ")
     
-    if last_human_idx == -1 or last_assistant_idx == -1:
-        return None
+#     if last_human_idx == -1 or last_assistant_idx == -1:
+#         return None
     
-    # Extract prompt (includes everything up to "Assistant: ")
-    prompt = chosen_text[:last_assistant_idx + len("\n\nAssistant: ")]
+#     # Extract prompt (includes everything up to "Assistant: ")
+#     prompt = chosen_text[:last_assistant_idx + len("\n\nAssistant: ")]
     
-    # Extract responses (everything after "Assistant: ")
-    chosen_response = chosen_text[last_assistant_idx + len("\n\nAssistant: "):].strip()
+#     # Extract responses (everything after "Assistant: ")
+#     chosen_response = chosen_text[last_assistant_idx + len("\n\nAssistant: "):].strip()
     
-    rejected_last_idx = rejected_text.rfind("\n\nAssistant: ")
-    rejected_response = rejected_text[rejected_last_idx + len("\n\nAssistant: "):].strip()
+#     rejected_last_idx = rejected_text.rfind("\n\nAssistant: ")
+#     rejected_response = rejected_text[rejected_last_idx + len("\n\nAssistant: "):].strip()
     
-    return {
-        "prompt": prompt,
-        "chosen": chosen_response,
-        "rejected": rejected_response,
-    }
+#     return {
+#         "prompt": prompt,
+#         "chosen": chosen_response,
+#         "rejected": rejected_response,
+#     }
 
-# Process datasets
-train_dataset = dataset.map(
-    prepare_dataset,
-    remove_columns=dataset.column_names,
-    num_proc=training_config.dataset_num_proc,
-    desc="Processing train dataset"
-).filter(lambda x: x is not None)
+# # Process datasets
+# train_dataset = dataset.map(
+#     prepare_dataset,
+#     remove_columns=dataset.column_names,
+#     num_proc=training_config.dataset_num_proc,
+#     desc="Processing train dataset"
+# ).filter(lambda x: x is not None)
 
-eval_dataset = eval_dataset.map(
-    prepare_dataset,
-    remove_columns=eval_dataset.column_names,
-    num_proc=training_config.dataset_num_proc,
-    desc="Processing eval dataset"
-).filter(lambda x: x is not None)
+# eval_dataset = eval_dataset.map(
+#     prepare_dataset,
+#     remove_columns=eval_dataset.column_names,
+#     num_proc=training_config.dataset_num_proc,
+#     desc="Processing eval dataset"
+# ).filter(lambda x: x is not None)
 
 print(f"Train dataset size: {len(train_dataset)}")
 print(f"Eval dataset size: {len(eval_dataset)}")
