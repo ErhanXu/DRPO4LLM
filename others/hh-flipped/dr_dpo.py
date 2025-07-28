@@ -97,7 +97,7 @@ REPETITION_PENALTY = 1.0
 
 
 # --- Part 1: Training Function ---
-def train_model(model_args: ModelConfig, script_args: ScriptArguments, training_args: dr_dpoConfig):
+def train_model(model_args: ModelConfig, script_args: ScriptArguments, training_args: DPOConfig):
     """
     Loads a base model, trains it using dr_dpoTrainer, and pushes it to the Hub.
     """
