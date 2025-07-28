@@ -35,6 +35,8 @@ OUTPUT_DIR = "./drpo-ddp-lora-qwen2.5-1.5b"
 # Training configuration
 training_config = DRPOConfig(
     output_dir=OUTPUT_DIR,
+    push_to_hub=True,
+    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-lora-hh",
     
     # Basic training parameters
     per_device_train_batch_size=4,  # Adjust based on your GPU memory
@@ -85,9 +87,9 @@ training_config = DRPOConfig(
     greater_is_better=True,
     
     # Dataset processing
-    dataset_num_proc=4,  # Use multiple CPU cores
-    dataloader_num_workers=2,
-    dataloader_pin_memory=True,
+    dataset_num_proc=1,  # Use multiple CPU cores
+    # dataloader_num_workers=2,
+    # dataloader_pin_memory=True,
     
     # Memory optimization
     torch_empty_cache_steps=50,
