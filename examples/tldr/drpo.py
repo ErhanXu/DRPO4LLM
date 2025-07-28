@@ -34,9 +34,9 @@ training_config = DRPOConfig(
     hub_model_id="Eehan/pythia-1b-drpo-lora-tldr",
     
     # Basic training parameters
-    per_device_train_batch_size=4,  # Reduced for 1B model with LoRA
+    per_device_train_batch_size=16,  # Reduced for 1B model with LoRA
     gradient_accumulation_steps=8,   # Effective batch size = 4 * 8 = 32
-    per_device_eval_batch_size=8,
+    per_device_eval_batch_size=32,
     learning_rate=5e-6,  # Slightly higher LR for LoRA
     num_train_epochs=1,
     warmup_steps=100,
