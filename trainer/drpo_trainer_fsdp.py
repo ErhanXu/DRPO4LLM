@@ -829,6 +829,14 @@ class DRPOTrainer(OnlineDPOTrainer):
             all_ref_logprobs, num_total_samples, dim=0
         )       
         
+        chosen_ids, rejected_ids, *mc_ids_list = torch.chunk(
+            all_completion_ids, num_total_samples, dim=0
+        )
+
+        chosen_mask, rejected_mask, *mc_mask_list = torch.chunk(
+            all_completion_masks, num_total_samples, dim=0
+        )
+        
         # 5. Compute preference scores
         g_chosen_rejected = self._compute_preference_scores_batch(
             prompt_ids, prompt_mask, chosen_ids, chosen_mask, rejected_ids, rejected_mask
