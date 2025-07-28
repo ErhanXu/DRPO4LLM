@@ -1,168 +1,204 @@
 import os
 import sys
-import yaml
+import torch
+from datasets import load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+)
+from peft import LoraConfig, TaskType, get_peft_model
+import wandb
+import swanlab
+os.environ["WANDB_MODE"] = "offline"
+swanlab.sync_wandb()
 
-# Add the parent directory to Python path
+# Add parent directories to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-import numpy as np
-import random
-import torch
-from datasets import Dataset, features, load_dataset, concatenate_datasets, DatasetDict
-from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    AutoModelForVision2Seq,
-    AutoProcessor,
-    AutoTokenizer,
-    PreTrainedTokenizerBase,
-    is_vision_available,
+from trainer.drpo_trainer_new import DRPOTrainer
+from trainer.drpo_config_new import DRPOConfig
+
+# Configuration
+MODEL_NAME = "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr" # Change to your model
+REWARD_MODEL_NAME = "cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr"  # Change to your reward model
+DATASET_NAME = "Eehan/train_data_tldr_flipped-10"  # Change to your dataset
+OUTPUT_DIR = "./drpo-flipped-tldr"
+
+# Training configuration
+training_config = DRPOConfig(
+    output_dir=OUTPUT_DIR,
+    push_to_hub=True,
+    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-lora-flip-tldr",
+    
+    # Basic training parameters
+    per_device_train_batch_size=16,  # Adjust based on your GPU memory
+    gradient_accumulation_steps=4,   # Effective batch size = 4 * 4 * num_gpus
+    per_device_eval_batch_size=16,
+    learning_rate=5e-7,
+    num_train_epochs=1,
+    warmup_steps=100,
+    
+    # DRPO specific parameters
+    num_monte_carlo_samples=2,
+    beta=0.1,
+    kl_type="k3",
+    is_clip_min=0.1,
+    is_clip_max=5.0,
+    
+    # Generation parameters
+    max_new_tokens=128,
+    temperature=0.65,
+    max_length=640,
+    max_prompt_length=512,
+    max_completion_length=128,
+    
+    # Optimization settings
+    bf16=True,  # Use bf16 for better performance
+    # tf32=True,  # Enable TF32 on Ampere GPUs
+    # gradient_checkpointing=True,
+    # gradient_checkpointing_kwargs={"use_reentrant": True},
+    # optim="adamw_torch_fused",  # Use fused optimizer for speed
+    # adam_beta1=0.9,
+    # adam_beta2=0.999,
+    # adam_epsilon=1e-8,
+    # weight_decay=0.01,
+    
+    # DDP settings (no FSDP or DeepSpeed)
+    ddp_find_unused_parameters=False,
+    ddp_bucket_cap_mb=25,
+    
+    # Logging and saving
+    logging_steps=10,
+    save_strategy="steps",
+    save_steps=500,
+    save_total_limit=2,
+    eval_strategy="steps",
+    eval_steps=100,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_generated/win_rate_vs_chosen",
+    greater_is_better=True,
+    
+    # Dataset processing
+    dataset_num_proc=1,  # Use multiple CPU cores
+    # dataloader_num_workers=2,
+    # dataloader_pin_memory=True,
+    
+    # Memory optimization
+    torch_empty_cache_steps=50,
+    
+    # Evaluation
+    eval_with_generation=True,
+    eval_mc_samples=1,
+    
+    # Reporting
+    report_to="wandb",  # Change to "none" if you don't want to use wandb
+    run_name="drpo-ddp-lora-tldr",
 )
-from transformers.testing_utils import require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled, require_vision
 
-from trl import (
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
+# LoRA configuration
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=64,  # LoRA rank
+    lora_alpha=128,  # LoRA alpha
+    lora_dropout=0.05,
+    bias="none",
+    target_modules=[
+        "q_proj", "v_proj", "k_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ],
+    # Don't include embedding/lm_head in modules_to_save for DDP
+    modules_to_save=None,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
-from trainer.drpo_config import DRPOConfig
-from trainer.drpo_trainer import DRPOTrainer
 
-DATASETNAME = "Kyleyee/train_data_tldr_for_drpo"
-MODELNAME = "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr"
+def main():
+    """Main training function."""
+    
+    # Initialize wandb if using
+    if training_config.report_to == "wandb":
+        wandb.init(project="drpo-training", name=training_config.run_name)
+    
+    print("Loading and preparing dataset...")
+    # Load dataset
+    train_dataset = load_dataset(DATASET_NAME, split="train")  # Using subset for demo
+    eval_dataset = load_dataset(DATASET_NAME, split="test[:1000]")
 
-def main(script_args, training_args, model_args):
-    ################
-    # Model & Tokenizer
-    ###################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
-
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
-    peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-        )
-    else:
-        ref_model = None
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
+    
+    print(f"Train dataset size: {len(train_dataset)}")
+    print(f"Eval dataset size: {len(eval_dataset)}")
+    
+    # Load tokenizer
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
-    if script_args.ignore_bias_buffers:
-        # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
     
-    # Then create your preference pipeline
-    if training_args.is_bt_model:
-        if isinstance(training_args.preference_model_id, dict):
-            preference_pipeline = estDPOStylePipeline(training_args.preference_model_id)
-        else: 
-            preference_pipeline = BTRewardNetwork(training_args.preference_model_id, pad_token_id=tokenizer.pad_token_id)
-    else:
-        print("\033[33m++++++++++++++++++ using GPM ++++++++++++++++++\033[0m")
-        preference_pipeline = GPMwithRewardNetwork(training_args.preference_model_id)
-
-    ################
-    # Dataset
-    ################
-    raw_dataset = load_dataset(script_args.dataset_name, "default")
-    dataset = transform_dataset(raw_dataset)
-
-    print(f"\033[32mLoaded dataset sample:\033[0m {dataset['train'][0]}")
-    print(f"\033[32mLoaded swapped dataset sample:\033[0m {dataset['train'][len(dataset['train'])-1]}")
-
-    ##########
-    # Training
-    ################
-    trainer = DRPOTrainer(
-        model = model,
-        ref_model = ref_model,
-        preference_model = preference_pipeline,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split].select(range(1000)) if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
-        args = training_args
+    # Load models
+    print("Loading models...")
+    
+    # Load base model
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        use_cache=False,  # Disable KV cache for training
+        trust_remote_code=True,
+        attn_implementation="eager",  # Use scaled dot product attention
     )
-
+    
+    # # Apply LoRA
+    # print("Applying LoRA configuration...")
+    # model = get_peft_model(model, lora_config)
+    # model.print_trainable_parameters()
+    
+    # Enable gradient checkpointing
+    if training_config.gradient_checkpointing:
+        model.enable_input_require_grads()
+        model.gradient_checkpointing_enable()
+    
+    # Load reward model
+    print("Loading reward model...")
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        REWARD_MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        use_cache=False,
+        trust_remote_code=True,
+    )
+    
+    # Initialize trainer
+    print("Initializing DRPO trainer...")
+    trainer = DRPOTrainer(
+        model=model,
+        ref_model=None,  # Will use LoRA disabled state as reference
+        reward_model=reward_model,
+        args=training_config,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        processing_class=tokenizer,
+        peft_config=lora_config,  # Pass LoRA config here
+    )
+    
+    # Start training
+    print("Starting training...")
     trainer.train()
+    
+    # Save the final model
+    print("Saving model...")
+    trainer.save_model()
+    
+    # Save tokenizer
+    tokenizer.save_pretrained(training_config.output_dir)
+    
+    # Push to hub if needed
+    if training_config.push_to_hub:
+        print("Pushing to hub...")
+        trainer.push_to_hub()
+    
+    print("Training complete!")
 
-    if training_args.eval_strategy != "no":
-        metrics = trainer.evaluate()
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    # Save and push to hub
-    trainer.save_model(training_args.output_dir)
-    if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-
-def transform_dataset(dataset):
-    # Process each split individually (train/test)
-    def process_split(split):
-        original = dataset[split]
-        swapped = original.map(lambda x: {
-            'a1': x['a2'],
-            'a2': x['a1'],
-            # 'rank': 1 - int(random.random() < x['chosen_preference']),
-            'rank': 1 - x['rank'],
-        })
-
-        return concatenate_datasets([original, swapped])
-
-    # Apply processing to all splits
-    return DatasetDict({
-        split: process_split(split)
-        for split in dataset.keys()  # Handles 'train', 'test', etc.
-    })
-
-
-##################################
-
-script_args = ScriptArguments(
-        dataset_name=DATASETNAME,
-        dataset_train_split="train",
-        dataset_test_split="validation",
-)
-
-model_args = ModelConfig(
-        model_name_or_path = MODELNAME,
-)
-
-with open("./examples/tldr/config.yaml", "r") as f:
-    training_args_config = yaml.safe_load(f)
-
-training_args = DRPOConfig(
-    **training_args_config
-)
 
 if __name__ == "__main__":
-    main(script_args, training_args, model_args)
-
+    main()
 

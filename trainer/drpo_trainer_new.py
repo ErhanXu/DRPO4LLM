@@ -486,10 +486,10 @@ class DRPOTrainer(OnlineDPOTrainer):
                 
                 scores = get_preference_score_without_decoding(
                     preference_model=self.preference_model,
-                    a1_iuput_ids=prompt_response_1,
-                    a1_attention_mask=attention_mask_1,
-                    a2_input_ids=prompt_response_2,
-                    a2_attention_mask=attention_mask_2,
+                    iuput_ids_1=prompt_response_1,
+                    attention_mask_1=attention_mask_1,
+                    input_ids_2=prompt_response_2,
+                    attention_mask_2=attention_mask_2,
                     is_bt_model=(self.args.preference_model_type == "bt"),
                     device=prompt_ids.device
                 )
