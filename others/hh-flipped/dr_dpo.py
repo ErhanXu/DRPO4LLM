@@ -4,7 +4,7 @@ import logging
 from datasets import load_dataset, DatasetDict
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import (
-    DPOConfig
+    DPOConfig,
     ModelConfig,
     ScriptArguments,
     get_kbit_device_map,
