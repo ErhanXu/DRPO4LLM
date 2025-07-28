@@ -780,26 +780,40 @@ class DRPOTrainer(OnlineDPOTrainer):
         mc_ids_list = [ids for ids, _ in mc_samples]
         mc_mask_list = [mask for _, mask in mc_samples]
 
+        
+        def pad_to_same_length(tensor_list, pad_value, padding_side="right"):
+            """Pad a list of 2D tensors to the same length and return them as a list."""
+            max_len = max(t.shape[1] for t in tensor_list)
+            padded_list = []
+            
+            for t in tensor_list:
+                if t.shape[1] < max_len:
+                    pad_width = max_len - t.shape[1]
+                    if padding_side == "right":
+                        padded = F.pad(t, (0, pad_width), value=pad_value)
+                    else:  # left
+                        padded = F.pad(t, (pad_width, 0), value=pad_value)
+                else:
+                    padded = t
+                padded_list.append(padded)
+            
+            return padded_list
 
-        
-        # 2. Batch all completions, and pad for forward passes
-        all_completion_ids = pad([chosen_ids, rejected_ids] + mc_ids_list, padding_value=self.processing_class.pad_token_id, padding_side="right")
-        all_completion_masks = pad([chosen_mask, rejected_mask] + mc_mask_list, padding_value=0, padding_side="right") 
-        # all_completion_ids = torch.cat([chosen_ids, rejected_ids] + mc_ids_list, dim=0)
-        # all_completion_masks = torch.cat([chosen_mask, rejected_mask] + mc_mask_list, dim=0)
-        
-        # Repeat prompts to match
-        num_total_samples = all_completion_ids.shape[0]
-        print(all_completion_ids)
+        # Pad all sequences to same length
+        all_sequences = [chosen_ids, rejected_ids] + mc_ids_list
+        all_masks = [chosen_mask, rejected_mask] + mc_mask_list
+
+        padded_sequences = pad_to_same_length(all_sequences, self.processing_class.pad_token_id, "right")
+        padded_masks = pad_to_same_length(all_masks, 0, "right")
+
+        # Now concatenate along batch dimension
+        all_completion_ids = torch.cat(padded_sequences, dim=0)  # [total_batch_size, seq_len]
+        all_completion_masks = torch.cat(padded_masks, dim=0)
+
+        # Repeat prompts
+        num_total_samples = len(padded_sequences)
         all_prompt_ids = prompt_ids.repeat(num_total_samples, 1)
-        print(all_prompt_ids)
         all_prompt_mask = prompt_mask.repeat(num_total_samples, 1)
-
-        # 3. Batched forward passes
-        all_logprobs, all_ref_logprobs = self._batched_forward_pass(
-            model, self.ref_model, all_prompt_ids, all_prompt_mask, 
-            all_completion_ids, all_completion_masks
-        )
         
         # 4. Split results
         chosen_logprobs, rejected_logprobs, *mc_logprobs_list = torch.chunk(
