@@ -101,6 +101,9 @@ training_config = DRPOConfig(
     # Reporting
     report_to="wandb",  # Change to "none" if you don't want to use wandb
     run_name="drpo-ddp-lora",
+
+    use_preference_model=True,
+    preference_model_path=REWARD_MODEL_NAME,
 )
 
 # LoRA configuration
@@ -173,19 +176,20 @@ def main():
     #     trust_remote_code=True,
     # )
 
-    preference_model = AutoModelForSequenceClassification.from_pretrained(
-        REWARD_MODEL_NAME,
-        torch_dtype=torch.bfloat16,
-        use_cache=False,
-        trust_remote_code=True,
-    )
+    # preference_model = AutoModelForSequenceClassification.from_pretrained(
+    #     REWARD_MODEL_NAME,
+    #     torch_dtype=torch.bfloat16,
+    #     use_cache=False,
+    #     trust_remote_code=True,
+    # )
     
     # Initialize trainer
     print("Initializing DRPO trainer...")
     trainer = DRPOTrainer(
         model=model,
         ref_model=None,  # Will use LoRA disabled state as reference
-        preference_model=preference_model,
+        # preference_model=preference_model,
+        reward_model=None,
         args=training_config,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
