@@ -79,8 +79,8 @@ training_config = DRPOConfigFSDP(
     bf16=True,
     fp16=False,  # Use bf16 with modern GPUs
     # tf32=True,  # Enable TF32 for A100/H100
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # Non-reentrant for FSDP
+    gradient_checkpointing=False,
+    # gradient_checkpointing_kwargs={"use_reentrant": False},  # Non-reentrant for FSDP
     optim="adamw_torch_fused",  # Fused optimizer for better performance
     adam_beta1=0.9,
     adam_beta2=0.999,
@@ -132,8 +132,8 @@ else:
 # PEFT LoRA configuration
 peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
-    r=16,  # LoRA rank
-    lora_alpha=32,  # LoRA alpha
+    r=64,  # LoRA rank
+    lora_alpha=128,  # LoRA alpha
     lora_dropout=0.05,
     target_modules=["q_proj", "v_proj", "k_proj", "o_proj", 
                     "gate_proj", "up_proj", "down_proj"],
