@@ -142,8 +142,8 @@ peft_config = LoraConfig(
 
 # Load and prepare dataset
 print("Loading and preparing dataset...")
-dataset = load_dataset("Eehan/train_data_hh", split="train")
-eval_dataset = load_dataset("Eehan/train_data_hh", split="test[:2000]")
+train_dataset = load_dataset("Eehan/train_data_helpful", split="train")
+eval_dataset = load_dataset("Eehan/train_data_helpful", split="test[:2000]")
 
 # def prepare_dataset(example):
 #     """Extract prompt and chosen/rejected responses from HH-RLHF format."""
