@@ -27,7 +27,7 @@ from trainer.drpo_trainer_new import DRPOTrainer
 from trainer.drpo_config_new import DRPOConfig
 
 # Configuration
-MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-3e"  # Change to your model
+MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"  # Change to your model
 REWARD_MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-reward-hh-retrain"  # Change to your reward model
 DATASET_NAME = "Eehan/train_data_helpful"  # Change to your dataset
 OUTPUT_DIR = "./drpo-ddp-lora-qwen2.5-1.5b"
