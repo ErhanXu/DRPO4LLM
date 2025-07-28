@@ -28,15 +28,15 @@ from trainer.drpo_config_new import DRPOConfig
 
 # Configuration
 MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"  # Change to your model
-REWARD_MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-reward-hh-retrain"  # Change to your reward model
-DATASET_NAME = "Eehan/train_data_helpful"  # Change to your dataset
-OUTPUT_DIR = "./drpo-ddp-lora-qwen2.5-1.5b"
+REWARD_MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-gpm-hh-2e-2dim"  # Change to your reward model
+DATASET_NAME = "Eehan/train_data_helpful_flipped-10"  # Change to your dataset
+OUTPUT_DIR = "./drpo-flipped"
 
 # Training configuration
 training_config = DRPOConfig(
     output_dir=OUTPUT_DIR,
     push_to_hub=True,
-    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-lora-hh",
+    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-lora-flip-hh",
     
     # Basic training parameters
     per_device_train_batch_size=4,  # Adjust based on your GPU memory
@@ -63,13 +63,13 @@ training_config = DRPOConfig(
     # Optimization settings
     bf16=True,  # Use bf16 for better performance
     # tf32=True,  # Enable TF32 on Ampere GPUs
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": True},
-    optim="adamw_torch_fused",  # Use fused optimizer for speed
-    adam_beta1=0.9,
-    adam_beta2=0.999,
-    adam_epsilon=1e-8,
-    weight_decay=0.01,
+    # gradient_checkpointing=True,
+    # gradient_checkpointing_kwargs={"use_reentrant": True},
+    # optim="adamw_torch_fused",  # Use fused optimizer for speed
+    # adam_beta1=0.9,
+    # adam_beta2=0.999,
+    # adam_epsilon=1e-8,
+    # weight_decay=0.01,
     
     # DDP settings (no FSDP or DeepSpeed)
     ddp_find_unused_parameters=False,
@@ -83,7 +83,7 @@ training_config = DRPOConfig(
     eval_strategy="steps",
     eval_steps=100,
     load_best_model_at_end=True,
-    metric_for_best_model="eval_generated/win_rate_vs_rejected",
+    metric_for_best_model="eval_generated/win_rate_vs_chosen",
     greater_is_better=True,
     
     # Dataset processing
@@ -166,7 +166,14 @@ def main():
     
     # Load reward model
     print("Loading reward model...")
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
+    # reward_model = AutoModelForSequenceClassification.from_pretrained(
+    #     REWARD_MODEL_NAME,
+    #     torch_dtype=torch.bfloat16,
+    #     use_cache=False,
+    #     trust_remote_code=True,
+    # )
+
+    preference_model = AutoModelForSequenceClassification.from_pretrained(
         REWARD_MODEL_NAME,
         torch_dtype=torch.bfloat16,
         use_cache=False,
@@ -178,7 +185,7 @@ def main():
     trainer = DRPOTrainer(
         model=model,
         ref_model=None,  # Will use LoRA disabled state as reference
-        reward_model=reward_model,
+        preference_model=preference_model,
         args=training_config,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

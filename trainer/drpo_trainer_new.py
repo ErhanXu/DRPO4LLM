@@ -164,7 +164,7 @@ class DRPOTrainer(OnlineDPOTrainer):
                 bf16=args.bf16
             )
             # Don't use standard reward model when using custom preference model
-            reward_model = None
+            reward_model = self.preference_model
         
         # Create data collator if not provided
         if data_collator is None:
