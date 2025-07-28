@@ -15,6 +15,9 @@ from transformers import (
 )
 from peft import LoraConfig, TaskType, get_peft_model
 import wandb
+import swanlab
+os.environ["WANDB_MODE"] = "offline"
+swanlab.sync_wandb()
 
 # Add parent directories to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
