@@ -104,6 +104,7 @@ training_config = DRPOConfig(
 
     use_preference_model=True,
     preference_model_path=REWARD_MODEL_NAME,
+    preference_model_type="general",
 )
 
 # LoRA configuration
