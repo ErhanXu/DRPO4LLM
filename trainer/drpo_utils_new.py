@@ -64,13 +64,6 @@ class GPMRewardHead(nn.Module):
 
 
 class GPMwithRewardNetwork(nn.Module):
-    """
-    General Preference Model that extends beyond Bradley-Terry framework.
-    
-    Instead of scalar rewards, uses vector embeddings to represent preferences,
-    allowing for intransitive preferences and other non-BT patterns.
-    """
-    
     def __init__(
         self, 
         model_name_or_path: str,
@@ -126,11 +119,21 @@ class GPMwithRewardNetwork(nn.Module):
         # Add GPM head
         self.gpm_head = GPMRewardHead(config, value_head_dim, add_prompt_head)
         
-        # Load GPM head weights if available
+        # FIX: Load GPM head weights with correct dtype
+        dtype = torch.bfloat16 if bf16 else torch.float32
+        
         if "value_head.weight" in combined_weights:
-            self.gpm_head.value_head.weight.data = combined_weights["value_head.weight"].to(device)
+            # Convert weight to correct dtype and device
+            self.gpm_head.value_head.weight.data = combined_weights["value_head.weight"].to(
+                device=device, dtype=dtype
+            )
         if add_prompt_head and "prompt_head.weight" in combined_weights:
-            self.gpm_head.prompt_head.weight.data = combined_weights["prompt_head.weight"].to(device)
+            self.gpm_head.prompt_head.weight.data = combined_weights["prompt_head.weight"].to(
+                device=device, dtype=dtype
+            )
+        
+        # FIX: Ensure the entire GPM head is in the correct dtype
+        self.gpm_head = self.gpm_head.to(dtype=dtype)
         
         if pad_token_id is not None:
             self.model.config.pad_token_id = pad_token_id
