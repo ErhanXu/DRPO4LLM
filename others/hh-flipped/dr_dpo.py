@@ -52,7 +52,7 @@ TRAIN_SCRIPT_ARGS = ScriptArguments(
 )
 
 # dr_dpo training configuration
-TRAINING_ARGS = DrDPOConfig(
+TRAINING_ARGS = DPOConfig(
     # dr_dpo-specific parameters
     beta=0.1,  # Temperature parameter for dr_dpo loss - PLEASE CONFIRM IF THIS VALUE IS OK
     label_smoothing=0.0,
