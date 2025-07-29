@@ -50,7 +50,7 @@ training_config = DRPOConfig(
     
     # Generation parameters
     max_new_tokens=128,
-    temperature=0.65,
+    temperature=0.75,
     max_length=640,
     max_prompt_length=512,
     max_completion_length=128,
@@ -61,10 +61,10 @@ training_config = DRPOConfig(
     gradient_checkpointing=True,  # Important for memory efficiency
     gradient_checkpointing_kwargs={"use_reentrant": False},
     optim="adamw_torch_fused",  # Use fused optimizer for speed
-    adam_beta1=0.9,
-    adam_beta2=0.999,
-    adam_epsilon=1e-8,
-    weight_decay=0.01,
+    # adam_beta1=0.9,
+    # adam_beta2=0.999,
+    # adam_epsilon=1e-8,
+    # weight_decay=0.01,
     
     # DDP settings
     ddp_find_unused_parameters=False,
@@ -98,22 +98,22 @@ training_config = DRPOConfig(
     run_name="drpo-pythia-1b-tldr-flip",
 )
 
-# # LoRA configuration for Pythia (GPT-NeoX architecture)
-# lora_config = LoraConfig(
-#     task_type=TaskType.CAUSAL_LM,
-#     r=64,  # LoRA rank
-#     lora_alpha=128,  # LoRA alpha (typically 2*r)
-#     lora_dropout=0.05,
-#     bias="none",
-#     target_modules=[
-#         "query_key_value",  # Pythia's combined QKV projection
-#         "dense",            # Output projection in attention
-#         "dense_h_to_4h",    # MLP input projection
-#         "dense_4h_to_h",    # MLP output projection
-#     ],
-#     # Don't include embedding/lm_head in modules_to_save for DDP
-#     modules_to_save=None,
-# )
+# LoRA configuration for Pythia (GPT-NeoX architecture)
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=64,  # LoRA rank
+    lora_alpha=128,  # LoRA alpha (typically 2*r)
+    lora_dropout=0.05,
+    bias="none",
+    target_modules=[
+        "query_key_value",  # Pythia's combined QKV projection
+        "dense",            # Output projection in attention
+        "dense_h_to_4h",    # MLP input projection
+        "dense_4h_to_h",    # MLP output projection
+    ],
+    # Don't include embedding/lm_head in modules_to_save for DDP
+    modules_to_save=None,
+)
 
 
 def prepare_tldr_dataset(example):
@@ -186,17 +186,17 @@ def main():
     print(f"Model type: {model.config.model_type}")
     print(f"Model architecture: {type(model)}")
     
-    # # Apply LoRA
-    # print("Applying LoRA configuration...")
-    # model = get_peft_model(model, lora_config)
-    # model.print_trainable_parameters()
+    # Apply LoRA
+    print("Applying LoRA configuration...")
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.bfloat16,
-        use_cache=False,
-        trust_remote_code=True
-    )
+    # ref_model = AutoModelForCausalLM.from_pretrained(
+    #     MODEL_NAME,
+    #     torch_dtype=torch.bfloat16,
+    #     use_cache=False,
+    #     trust_remote_code=True
+    # )
     
     # Enable gradient checkpointing after LoRA
     if training_config.gradient_checkpointing:
@@ -222,7 +222,7 @@ def main():
     print("Initializing DRPO trainer...")
     trainer = DRPOTrainer(
         model=model,
-        ref_model=ref_model,  # Will use LoRA disabled state as reference
+        ref_model=None,  # Will use LoRA disabled state as reference
         reward_model=reward_model,
         args=training_config,
         train_dataset=train_dataset,
@@ -252,7 +252,7 @@ def main():
     
     # Create model card
     trainer.create_model_card(
-        model_name=f"pythia-1b-drpo-tldr",
+        model_name=f"pythia-1b-drpo-tldr-flip-lora-V1",
         dataset_name=DATASET_NAME,
         tags=["drpo", "pythia", "lora", "tldr", "summarization"]
     )

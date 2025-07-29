@@ -38,11 +38,9 @@ from trl.trainer.utils import (
     truncate_right
 )
 
-from .drpo_config import DRPOConfig
+import wandb
 
-# Optional imports
-if is_wandb_available():
-    import wandb
+from .drpo_config import DRPOConfig
 
 if is_peft_available():
     from peft import PeftModel
@@ -1348,6 +1346,60 @@ class DRPOTrainer(OnlineDPOTrainer):
                     'eval/entropy': all_mc_entropy.mean().item(),
                     'eval/entropy_std': all_mc_entropy.std().item(),
                 })
+            
+                            # Log samples to wandb
+                if (self.state.is_world_process_zero and 
+                    wandb.run is not None and
+                    self.state.global_step % self.args.eval_steps == 0):  # Log every 100 steps
+                    
+                    # Decode texts
+                    if prompt_texts is None:
+                        prompt_texts = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
+                    if chosen_texts is None:
+                        chosen_texts = self.processing_class.batch_decode(chosen_ids, skip_special_tokens=True)
+                    if rejected_texts is None:
+                        rejected_texts = self.processing_class.batch_decode(rejected_ids, skip_special_tokens=True)
+                    
+                    # Decode MC samples
+                    mc_texts_all = []
+                    for mc_ids, _ in mc_samples_for_logging:
+                        mc_texts = self.processing_class.batch_decode(mc_ids, skip_special_tokens=True)
+                        mc_texts_all.append(mc_texts)
+                    
+                    # Create table
+                    num_to_log = min(5, batch_size)
+                    columns = ["Prompt", "Chosen", "Rejected"]
+                    for i in range(len(mc_texts_all)):
+                        columns.append(f"Generated_{i+1}")
+                    columns.extend(["P(chosen>rej)", "P(gen1>rej)", "P(gen1>chosen)"])
+                    
+                    table_data = []
+                    for i in range(num_to_log):
+                        row = [
+                            prompt_texts[i][:300],
+                            chosen_texts[i][:300],
+                            rejected_texts[i][:300]
+                        ]
+                        
+                        for mc_texts in mc_texts_all:
+                            row.append(mc_texts[i][:300])
+                        
+                        row.extend([
+                            f"{g_chosen_rejected[i]:.3f}",
+                            f"{all_g_mc_rejected[0][i]:.3f}",
+                            f"{all_g_mc_chosen[0][i]:.3f}"
+                        ])
+                        
+                        table_data.append(row)
+                    
+                    # Log table and histograms
+                    table = wandb.Table(columns=columns, data=table_data)
+                    wandb.log({
+                        "eval/samples": table,
+                        "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].cpu().numpy()),
+                        "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].cpu().numpy()),
+                        "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].cpu().numpy())
+                    })
             
             
             # Use negative preference accuracy as loss (lower is better)
