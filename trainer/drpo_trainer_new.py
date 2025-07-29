@@ -470,11 +470,11 @@ class DRPOTrainer(OnlineDPOTrainer):
                 from .drpo_utils_new import get_preference_score_without_decoding
                 
                 scores = get_preference_score_without_decoding(
-                    preference_model=self.preference_model,
-                    input_ids_1=prompt_response_1,  # Fix typo: was a1_iuput_ids
-                    attention_mask_1=attention_mask_1,
-                    input_ids_2=prompt_response_2,  # Fix typo: was a2_input_ids
-                    attention_mask_2=attention_mask_2,
+                    self.preference_model,
+                    prompt_response_1,
+                    attention_mask_1,
+                    prompt_response_2,
+                    attention_mask_2,
                     is_bt_model=(self.args.preference_model_type == "bt"),
                 )
                 
