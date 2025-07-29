@@ -25,7 +25,7 @@ from trainer.drpo_config_new import DRPOConfig
 MODEL_NAME = "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr"
 REWARD_MODEL_NAME = "cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr"
 DATASET_NAME = "Eehan/train_data_tldr_flipped-10"
-OUTPUT_DIR = "./drpo-pythia-1b-tldr"
+OUTPUT_DIR = "./drpo-pythia-1b-tldr-flip"
 
 # Training configuration optimized for Pythia-1B
 training_config = DRPOConfig(
@@ -34,12 +34,12 @@ training_config = DRPOConfig(
     hub_model_id="Eehan/pythia-1b-drpo-lora-tldr",
     
     # Basic training parameters
-    per_device_train_batch_size=16,  # Reduced for 1B model with LoRA
-    gradient_accumulation_steps=8,   # Effective batch size = 4 * 8 = 32
-    per_device_eval_batch_size=32,
-    learning_rate=5e-6,  # Slightly higher LR for LoRA
+    per_device_train_batch_size=4,  # Reduced for 1B model with LoRA
+    gradient_accumulation_steps=4,   # Effective batch size = 4 * 8 = 32
+    per_device_eval_batch_size=16,
+    learning_rate=5e-7,  # Slightly higher LR for LoRA
     num_train_epochs=1,
-    warmup_steps=100,
+    # warmup_steps=100,
     
     # DRPO specific parameters
     num_monte_carlo_samples=2,
@@ -50,7 +50,7 @@ training_config = DRPOConfig(
     
     # Generation parameters
     max_new_tokens=128,
-    temperature=0.7,
+    temperature=0.65,
     max_length=640,
     max_prompt_length=512,
     max_completion_length=128,
@@ -76,7 +76,7 @@ training_config = DRPOConfig(
     save_steps=500,
     save_total_limit=2,
     eval_strategy="steps",
-    eval_steps=100,
+    eval_steps=50,
     load_best_model_at_end=True,
     metric_for_best_model="eval_generated/win_rate_vs_chosen",
     greater_is_better=True,
@@ -95,25 +95,25 @@ training_config = DRPOConfig(
     
     # Reporting
     report_to="wandb",  # or "none" if you don't want logging
-    run_name="drpo-pythia-1b-lora-tldr",
+    run_name="drpo-pythia-1b-tldr-flip",
 )
 
-# LoRA configuration for Pythia (GPT-NeoX architecture)
-lora_config = LoraConfig(
-    task_type=TaskType.CAUSAL_LM,
-    r=64,  # LoRA rank
-    lora_alpha=128,  # LoRA alpha (typically 2*r)
-    lora_dropout=0.05,
-    bias="none",
-    target_modules=[
-        "query_key_value",  # Pythia's combined QKV projection
-        "dense",            # Output projection in attention
-        "dense_h_to_4h",    # MLP input projection
-        "dense_4h_to_h",    # MLP output projection
-    ],
-    # Don't include embedding/lm_head in modules_to_save for DDP
-    modules_to_save=None,
-)
+# # LoRA configuration for Pythia (GPT-NeoX architecture)
+# lora_config = LoraConfig(
+#     task_type=TaskType.CAUSAL_LM,
+#     r=64,  # LoRA rank
+#     lora_alpha=128,  # LoRA alpha (typically 2*r)
+#     lora_dropout=0.05,
+#     bias="none",
+#     target_modules=[
+#         "query_key_value",  # Pythia's combined QKV projection
+#         "dense",            # Output projection in attention
+#         "dense_h_to_4h",    # MLP input projection
+#         "dense_4h_to_h",    # MLP output projection
+#     ],
+#     # Don't include embedding/lm_head in modules_to_save for DDP
+#     modules_to_save=None,
+# )
 
 
 def prepare_tldr_dataset(example):
@@ -186,10 +186,17 @@ def main():
     print(f"Model type: {model.config.model_type}")
     print(f"Model architecture: {type(model)}")
     
-    # Apply LoRA
-    print("Applying LoRA configuration...")
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+    # # Apply LoRA
+    # print("Applying LoRA configuration...")
+    # model = get_peft_model(model, lora_config)
+    # model.print_trainable_parameters()
+
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        use_cache=False,
+        trust_remote_code=True
+    )
     
     # Enable gradient checkpointing after LoRA
     if training_config.gradient_checkpointing:
@@ -215,7 +222,7 @@ def main():
     print("Initializing DRPO trainer...")
     trainer = DRPOTrainer(
         model=model,
-        ref_model=None,  # Will use LoRA disabled state as reference
+        ref_model=ref_model,  # Will use LoRA disabled state as reference
         reward_model=reward_model,
         args=training_config,
         train_dataset=train_dataset,
@@ -245,7 +252,7 @@ def main():
     
     # Create model card
     trainer.create_model_card(
-        model_name=f"pythia-1b-drpo-lora-tldr",
+        model_name=f"pythia-1b-drpo-tldr",
         dataset_name=DATASET_NAME,
         tags=["drpo", "pythia", "lora", "tldr", "summarization"]
     )
