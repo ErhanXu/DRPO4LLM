@@ -133,8 +133,8 @@ def main():
     print("Loading and preparing dataset...")
     # Load dataset
     train_dataset = load_dataset(DATASET_NAME, split="train")  # Using subset for demo
-    # eval_dataset = load_dataset(DATASET_NAME, split="test[:1000]")
-    eval_dataset = None
+    eval_dataset = load_dataset(DATASET_NAME, split="test[:1000]")
+    # eval_dataset = None
     
     print(f"Train dataset size: {len(train_dataset)}")
     # print(f"Eval dataset size: {len(eval_dataset)}")
