@@ -49,7 +49,7 @@ MODEL_ARGS = ModelConfig(
 
 # Arguments for the training dataset
 TRAIN_SCRIPT_ARGS = ScriptArguments(
-    dataset_name="Eehan/train_data_tldr_flipped-10",  # TLDR dataset
+    dataset_name="Eehan/train_data_tldr",  # TLDR dataset
     dataset_train_split="train",
     dataset_test_split="test",
 )
@@ -70,9 +70,9 @@ TRAINING_ARGS = DPOConfig(
     eval_strategy="steps",
     eval_steps=500,
     # The model will be saved here locally
-    output_dir="/root/autodl-tmp/selfmodel/DrDPO_tldr_trained",
+    output_dir="/root/autodl-tmp/selfmodel/DrDPO_tldr",
     # The trained model will be pushed to this repository on the Hub
-    hub_model_id="Eehan/pythia-1b-dr_dpo-flip-tldr",
+    hub_model_id="Eehan/pythia-1b-dr_dpo-tldr",
     push_to_hub=True,
     save_strategy="no",
     report_to=["wandb"],
@@ -81,16 +81,16 @@ TRAINING_ARGS = DPOConfig(
 
 # --- Part 2: Generation Configuration ---
 # The model to use for generation will be the one we just trained
-METHOD_NAME = "dr_dpo-flipped"
+METHOD_NAME = "dr_dpo"
 
 # Dataset for generating evaluation responses
-EVAL_INPUT_DATASET_ID = "Eehan/train_data_tldr_flipped-10"
+EVAL_INPUT_DATASET_ID = "Eehan/train_data_tldr"
 EVAL_INPUT_DATASET_SPLIT = "test"
 
 # The dataset to merge results into
-EVAL_MERGE_INTO_DATASET_ID = "Eehan/eval-tldr-flipped"
+EVAL_MERGE_INTO_DATASET_ID = "Eehan/eval-tldr-all"
 # The final dataset name to be pushed to the hub
-EVAL_OUTPUT_DATASET_ID = "Eehan/eval-tldr-flipped"
+EVAL_OUTPUT_DATASET_ID = "Eehan/eval-tldr-all"
 
 # Generation parameters
 TEMPERATURES = [0, 0.25, 0.5, 0.75, 1]
