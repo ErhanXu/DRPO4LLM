@@ -156,7 +156,7 @@ class DRPOTrainer(OnlineDPOTrainer):
 
 
             # Import custom preference model
-            from .drpo_utils_new import GPMWrapper
+            from .drpo_utils_new import GPMwithRewardNetwork
                 # GPM or BT preference model
             self.preference_model = GPMwithRewardNetwork(
                 model_name_or_path=args.preference_model_path,
@@ -212,7 +212,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         # Handle preference model with distributed training
         if self.preference_model is not None:
             if self.is_deepspeed_enabled:
-                from .utils import prepare_deepspeed
+                from trl.trainer.utils import prepare_deepspeed
                 self.preference_model = prepare_deepspeed(
                     self.preference_model,
                     args.per_device_train_batch_size,
