@@ -30,21 +30,21 @@ from trainer.drpo_config_new import DRPOConfig
 MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"  # Change to your model
 REWARD_MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-gpm-hh-2e-2dim"  # Change to your reward model
 DATASET_NAME = "Eehan/train_data_helpful_flipped-10"  # Change to your dataset
-OUTPUT_DIR = "./drpo-flipped"
+OUTPUT_DIR = "./drpo-flipped-nolora"
 
 # Training configuration
 training_config = DRPOConfig(
     output_dir=OUTPUT_DIR,
     push_to_hub=True,
-    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-lora-flip-hh",
+    hub_model_id="Eehan/Qwen2.5-1.5B-drpo-flip-hh",
     
     # Basic training parameters
-    per_device_train_batch_size=4,  # Adjust based on your GPU memory
+    per_device_train_batch_size=2,  # Adjust based on your GPU memory
     gradient_accumulation_steps=4,   # Effective batch size = 4 * 4 * num_gpus
     per_device_eval_batch_size=4,
     learning_rate=5e-7,
     num_train_epochs=1,
-    warmup_steps=100,
+    # warmup_steps=100,
     
     # DRPO specific parameters
     num_monte_carlo_samples=2,
@@ -55,7 +55,7 @@ training_config = DRPOConfig(
     
     # Generation parameters
     max_new_tokens=256,
-    temperature=0.8,
+    temperature=0.85,
     max_length=1024,
     max_prompt_length=512,
     max_completion_length=512,
@@ -77,10 +77,10 @@ training_config = DRPOConfig(
     
     # Logging and saving
     logging_steps=10,
-    save_strategy="no",
-    save_steps=500,
+    save_strategy="steps",
+    save_steps=200,
     save_total_limit=2,
-    eval_strategy="no",
+    eval_strategy="steps",
     eval_steps=100,
     load_best_model_at_end=True,
     metric_for_best_model="eval_generated/win_rate_vs_chosen",
@@ -100,27 +100,27 @@ training_config = DRPOConfig(
     
     # Reporting
     report_to="wandb",  # Change to "none" if you don't want to use wandb
-    run_name="drpo-ddp-lora",
+    run_name="drpo-ddp-hh",
 
     use_preference_model=True,
     preference_model_path=REWARD_MODEL_NAME,
     preference_model_type="general",
 )
 
-# LoRA configuration
-lora_config = LoraConfig(
-    task_type=TaskType.CAUSAL_LM,
-    r=64,  # LoRA rank
-    lora_alpha=128,  # LoRA alpha
-    lora_dropout=0.05,
-    bias="none",
-    target_modules=[
-        "q_proj", "v_proj", "k_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj"
-    ],
-    # Don't include embedding/lm_head in modules_to_save for DDP
-    modules_to_save=None,
-)
+# # LoRA configuration
+# lora_config = LoraConfig(
+#     task_type=TaskType.CAUSAL_LM,
+#     r=64,  # LoRA rank
+#     lora_alpha=128,  # LoRA alpha
+#     lora_dropout=0.05,
+#     bias="none",
+#     target_modules=[
+#         "q_proj", "v_proj", "k_proj", "o_proj",
+#         "gate_proj", "up_proj", "down_proj"
+#     ],
+#     # Don't include embedding/lm_head in modules_to_save for DDP
+#     modules_to_save=None,
+# )
 
 
 def main():
@@ -156,6 +156,14 @@ def main():
         use_cache=False,  # Disable KV cache for training
         trust_remote_code=True,
         attn_implementation="eager",  # Use scaled dot product attention
+    )
+
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        use_cache=False,  # Disable KV cache for training
+        trust_remote_code=True,
+        # attn_implementation="eager",  # Use scaled dot product attention
     )
     
     # # Apply LoRA
@@ -195,7 +203,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        peft_config=lora_config,  # Pass LoRA config here
+        # peft_config=lora_config,  # Pass LoRA config here
     )
     
     # Start training
