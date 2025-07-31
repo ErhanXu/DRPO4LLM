@@ -12,6 +12,7 @@ from peft import LoraConfig, TaskType, get_peft_model
 import wandb
 import swanlab
 os.environ["WANDB_MODE"] = "offline"
+swanlab.init("drdrpo-flipped-lora-tldr")
 swanlab.sync_wandb()
 
 # Add parent directories to path

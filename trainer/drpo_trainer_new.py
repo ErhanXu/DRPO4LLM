@@ -39,15 +39,12 @@ from trl.trainer.utils import (
 )
 
 import wandb
+import swanlab
 
 from .drpo_config import DRPOConfig
 
 if is_peft_available():
     from peft import PeftModel
-
-
-if is_wandb_available():
-    import wandb
 
 if is_peft_available():
     from peft import PeftModel
@@ -1402,6 +1399,13 @@ class DRPOTrainer(OnlineDPOTrainer):
                         "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
                         "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
                         "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
+                    })
+
+                    swanlab.log({
+                        "eval/samples": table,
+                        "eval/g_mc_rejected_hist": swanlab.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
+                        "eval/g_mc_chosen_hist": swanlab.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
+                        "eval/mc_lengths_hist": swanlab.Histogram(all_mc_lengths[0].float().cpu().numpy())
                     })
             
             

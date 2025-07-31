@@ -4,6 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 import swanlab
 import wandb
 os.environ["WANDB_MODE"] = "offline"
+swanlab.init("drdrpo-flipped-lora-hh")
 swanlab.sync_wandb()
 import argparse
 
