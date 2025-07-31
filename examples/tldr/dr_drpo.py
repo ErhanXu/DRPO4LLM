@@ -78,12 +78,12 @@ training_config = DrDRPOConfig(
     ddp_find_unused_parameters=False,
     
     # Logging and saving
-    logging_steps=10,
+    logging_steps=5,
     save_strategy="steps",
     save_steps=250,
     save_total_limit=2,
     eval_strategy="steps",
-    eval_steps=50,
+    eval_steps=5,
     
     # Memory optimization
     torch_empty_cache_steps=50,
