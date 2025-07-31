@@ -1,10 +1,12 @@
 import torch
 import torch.nn.functional as F
-from typing import Optional, Union, Dict, List, Tuple, Callable
+from typing import Optional, Union, Dict, List, Tuple, Callable, Any
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from dataclasses import dataclass, field
-# import numpy as np
+from trl.trainer.utils import empty_cache
+from trl.models.utils import unwrap_model_for_generation
+import numpy as np
 
 from .drpo_trainer_new import DRPOTrainer
 from .drpo_config_new import DRPOConfig
@@ -134,97 +136,63 @@ class DrDRPOTrainer(DRPOTrainer):
         }
     
     def training_step(
-        self, 
+        self,
         model: torch.nn.Module,
-        inputs: Dict[str, torch.Tensor],
-        num_items_in_batch: Optional[int] = None,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        num_items_in_batch: Optional[int] = None
     ) -> torch.Tensor:
         """
-        Override training step to apply Dr.DRPO weighting.
+        Modified DRPO training step with Dr.DRPO sample weighting.
+        
+        This implementation:
+        1. Computes standard DRPO components (term_dm, IS terms)
+        2. Computes DPO-based weights for each sample
+        3. Applies weights to the loss terms
         """
         model.train()
         
-        # Extract inputs
-        prompt_ids = inputs["prompt_ids"]
-        prompt_mask = inputs["prompt_attention_mask"]
-        chosen_ids = inputs["chosen_ids"] 
-        chosen_mask = inputs["chosen_attention_mask"]
-        rejected_ids = inputs["rejected_ids"]
-        rejected_mask = inputs["rejected_attention_mask"]
+        # Move inputs to device
+        device = self.accelerator.device
+        prompt_ids = inputs["prompt_ids"].to(device)
+        prompt_mask = inputs["prompt_attention_mask"].to(device)
+        chosen_ids = inputs["chosen_ids"].to(device)
+        chosen_mask = inputs["chosen_attention_mask"].to(device)
+        rejected_ids = inputs["rejected_ids"].to(device)
+        rejected_mask = inputs["rejected_attention_mask"].to(device)
         
-        device = prompt_ids.device
+        # Original text for judge (if needed)
+        prompt_texts = inputs.get("prompt", None)
+        chosen_texts = inputs.get("chosen", None)
+        rejected_texts = inputs.get("rejected", None)
+        
         batch_size = prompt_ids.shape[0]
         
-        # Get text inputs if available (for judge-based preference)
-        # prompt_texts = inputs.get("prompt")
-        chosen_texts = inputs.get("chosen")
-        rejected_texts = inputs.get("rejected")
+        # === Step 1: Standard DRPO forward passes ===
+        # First compute all the log probabilities we need
         
-        # Step 1: Forward pass for chosen and rejected
+        # Compute policy log probs for chosen and rejected
+        chosen_logprobs = self._forward(model, prompt_ids, prompt_mask, chosen_ids, chosen_mask)
+        rejected_logprobs = self._forward(model, prompt_ids, prompt_mask, rejected_ids, rejected_mask)
+        
+        # Compute reference log probs
         with torch.no_grad():
-            # Get reference log probabilities
-            chosen_ref_logprobs = self._forward_and_get_log_probs(
-                self.ref_model, chosen_ids, chosen_mask
-            )
-            rejected_ref_logprobs = self._forward_and_get_log_probs(
-                self.ref_model, rejected_ids, rejected_mask
-            )
-        
-        # Get policy log probabilities (with gradients)
-        chosen_logprobs = self._forward_and_get_log_probs(
-            model, chosen_ids, chosen_mask
-        )
-        rejected_logprobs = self._forward_and_get_log_probs(
-            model, rejected_ids, rejected_mask
-        )
-        
-        # Step 2: Generate MC samples and compute their log probs
-        mc_samples = []
-        mc_logprobs_list = []
-        mc_ref_logprobs_list = []
-        mc_kl_total_list = []
-        mc_entropy_list = []
-        
-        for _ in range(self.args.num_monte_carlo_samples):
-            with torch.no_grad():
-                # Generate from current policy
-                mc_ids, mc_mask = self._generate_from_policy(
-                    model, prompt_ids, prompt_mask, 
-                    temperature=self.args.temperature
+            if self.ref_model is None:
+                with self.model.disable_adapter():
+                    chosen_ref_logprobs = self._forward(
+                        self.model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
+                    )
+                    rejected_ref_logprobs = self._forward(
+                        self.model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
+                    )
+            else:
+                chosen_ref_logprobs = self._forward(
+                    self.ref_model, prompt_ids, prompt_mask, chosen_ids, chosen_mask
                 )
-                mc_samples.append((mc_ids, mc_mask))
-                
-                # Get reference log probs for MC samples
-                mc_ref_logprobs = self._forward_and_get_log_probs(
-                    self.ref_model, mc_ids, mc_mask
+                rejected_ref_logprobs = self._forward(
+                    self.ref_model, prompt_ids, prompt_mask, rejected_ids, rejected_mask
                 )
-                mc_ref_logprobs_list.append(mc_ref_logprobs)
-            
-            # Get policy log probs for MC samples (with gradients)
-            mc_logprobs = self._forward_and_get_log_probs(model, mc_ids, mc_mask)
-            mc_logprobs_list.append(mc_logprobs)
-            
-            # Compute KL for regularization
-            with torch.no_grad():
-                total_kl = self._compute_kl_divergence(
-                    mc_logprobs, mc_ref_logprobs, mc_mask,
-                    kl_type=self.args.kl_type
-                )
-                mc_kl_total_list.append(total_kl)
-                
-                # Compute entropy
-                entropy = -(mc_logprobs * mc_mask).sum(dim=1)
-                mc_entropy_list.append(entropy)
         
-        # Step 3: Compute preference scores
-        g_chosen_rejected = self._compute_preference_scores_batch(
-            prompt_ids, prompt_mask,
-            chosen_ids, chosen_mask,
-            rejected_ids, rejected_mask,
-            chosen_texts, rejected_texts
-        )
-        
-        # Step 4: Compute Dr.DRPO weights
+        # === Step 2: Compute Dr.DRPO weights ===
         if self.use_dpo_preference:
             # Use DPO-based preference as weight
             weights = self._compute_dpo_preference_weight(
@@ -234,22 +202,88 @@ class DrDRPOTrainer(DRPOTrainer):
             )
         else:
             # Use standard preference score as weight
+            g_chosen_rejected = self._compute_preference_scores_batch(
+                prompt_ids, prompt_mask,
+                chosen_ids, chosen_mask,
+                rejected_ids, rejected_mask,
+                chosen_texts, rejected_texts
+            )
             weights = g_chosen_rejected
             if self.beta_prime != 1.0:
                 weights = torch.pow(weights + 1e-8, self.beta_prime)
             weights = torch.clamp(weights, self.weight_clip_range[0], self.weight_clip_range[1])
         
-        # Normalize weights by sum (not mean)
+        # Normalize weights by sum
         weights = weights / weights.sum()
         
-        # Step 5: Compute weighted term_dm
+        # === Step 3: Generate MC samples and compute DRPO terms ===
+        mc_samples = []
+        mc_logprobs_list = []
+        mc_ref_logprobs_list = []
+        mc_kl_total_list = []
+        mc_entropy_list = []
+        
+        # Generate MC samples
+        with torch.no_grad():
+            for _ in range(self.args.num_monte_carlo_samples):
+
+                with unwrap_model_for_generation(
+                    model, 
+                    self.accelerator,
+                    gather_deepspeed3_params=self.is_deepspeed_enabled
+                ) as unwrapped_model:
+                    _, _, mc_ids, mc_mask = self._generate(unwrapped_model, prompt_ids, prompt_mask)
+                
+                mc_ids = mc_ids.to(device)
+                mc_mask = mc_mask.to(device)
+                mc_samples.append((mc_ids, mc_mask))
+        
+        # Compute log probs for MC samples
+        for mc_ids, mc_mask in mc_samples:
+            mc_logprobs = self._forward(model, prompt_ids, prompt_mask, mc_ids, mc_mask)
+            mc_logprobs_list.append(mc_logprobs)
+            
+            # Reference log probs
+            with torch.no_grad():
+                if self.ref_model is None:
+                    with self.model.disable_adapter():
+                        mc_ref_logprobs = self._forward(
+                            self.model, prompt_ids, prompt_mask, mc_ids, mc_mask
+                        )
+                else:
+                    mc_ref_logprobs = self._forward(
+                        self.ref_model, prompt_ids, prompt_mask, mc_ids, mc_mask
+                    )
+                mc_ref_logprobs_list.append(mc_ref_logprobs)
+                
+                # Compute KL
+                _, total_kl = self._compute_kl_divergence(
+                    mc_logprobs, mc_ref_logprobs, mc_mask,
+                    kl_type=self.args.kl_type
+                )
+                mc_kl_total_list.append(total_kl)
+
+                # Compute entropy H(π) = -E[log π]
+                entropy = -(mc_logprobs * mc_mask).sum(dim=1)
+                mc_entropy_list.append(entropy)
+        
+        # Compute preference scores
+        g_chosen_rejected = self._compute_preference_scores_batch(
+            prompt_ids, prompt_mask,
+            chosen_ids, chosen_mask,
+            rejected_ids, rejected_mask,
+            chosen_texts, rejected_texts
+        )
+        
+        # === Step 4: Compute DRPO loss terms with Dr.DRPO weighting ===
+        
+        # Direct Method (DM) term
         term_dm = torch.zeros(batch_size, device=device)
         for (mc_ids, mc_mask), mc_logprobs in zip(mc_samples, mc_logprobs_list):
-            # g(mc, rejected)
+            # g(mc, rejected) and g(mc, chosen)
             g_mc_rejected = self._compute_preference_scores_batch(
                 prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
             )
-            # g(mc, chosen)  
             g_mc_chosen = self._compute_preference_scores_batch(
                 prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask
             )
@@ -263,7 +297,7 @@ class DrDRPOTrainer(DRPOTrainer):
         # Apply Dr.DRPO weighting to term_dm
         weighted_term_dm = (term_dm * weights).sum()  # Not mean!
         
-        # Step 6: Compute weighted IS terms
+        # Importance Sampling (IS) terms
         chosen_logprobs_sum = (chosen_logprobs * chosen_mask).sum(dim=1)
         rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(dim=1)
         
@@ -285,7 +319,7 @@ class DrDRPOTrainer(DRPOTrainer):
         # Apply Dr.DRPO weighting to IS term
         weighted_is_loss = -(is_term * weights).sum()  # Not mean!
         
-        # Step 7: Compute final loss
+        # === Step 5: Final loss computation ===
         drpo_loss = -weighted_term_dm + weighted_is_loss
         
         # KL regularization (using mean as in original)
@@ -294,7 +328,7 @@ class DrDRPOTrainer(DRPOTrainer):
         # Total loss
         loss = drpo_loss + self.beta * kl_loss
         
-        # Log statistics
+        # === Step 6: Log statistics ===
         with torch.no_grad():
             # Compute noise metrics
             noise_metrics = self._estimate_noise_metrics(weights)
@@ -317,17 +351,198 @@ class DrDRPOTrainer(DRPOTrainer):
                 noise_metrics["weight_entropy"]
             )
             
-            # Store weight history for later analysis
+            # Store weight history
             # self.weight_history.append(weights.detach().cpu().numpy())
             
-            # Log standard DRPO metrics (for original terms, not weighted)
-            self.stats["drpo/term_dm"].append(term_dm.mean().item())
-            self.stats["drpo/term_is"].append(is_term.mean().item())
-            self.stats["drpo/preference_score"].append(g_chosen_rejected.mean().item())
-            self.stats["objective/kl"].append(kl_loss.item())
-            self.stats["loss/total"].append(loss.item())
+            all_g_mc_rejected = []
+            all_g_mc_chosen = []
+            all_mc_lengths = []
+            all_mc_contains_eos = []
+            all_mc_logprobs_sum = []
+            
+            for (mc_ids, mc_mask), mc_logprobs in zip(mc_samples, mc_logprobs_list):
+                # Re-compute preference scores for logging
+                g_mc_rej = self._compute_preference_scores_batch(
+                    prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
+                )
+                g_mc_cho = self._compute_preference_scores_batch(
+                    prompt_ids, prompt_mask, mc_ids, mc_mask, chosen_ids, chosen_mask
+                )
+                
+                all_g_mc_rejected.append(g_mc_rej)
+                all_g_mc_chosen.append(g_mc_cho)
+                
+                # Track generation quality
+                mc_lengths = mc_mask.sum(dim=1)
+                all_mc_lengths.append(mc_lengths)
+                
+                mc_contains_eos = (mc_ids == self.processing_class.eos_token_id).any(dim=1)
+                all_mc_contains_eos.append(mc_contains_eos)
+                
+                mc_logprobs_sum = (mc_logprobs * mc_mask).sum(dim=1)
+                all_mc_logprobs_sum.append(mc_logprobs_sum)
+            
+            # Stack all MC samples
+            all_g_mc_rejected = torch.stack(all_g_mc_rejected)  # [num_mc, batch_size]
+            all_g_mc_chosen = torch.stack(all_g_mc_chosen)
+            all_mc_lengths = torch.stack(all_mc_lengths)
+            all_mc_contains_eos = torch.stack(all_mc_contains_eos)
+            all_mc_logprobs_sum = torch.stack(all_mc_logprobs_sum)
+            
+            # Core DRPO metrics
+            self.stats["drpo/term_dm"].append(
+                self.accelerator.gather_for_metrics(term_dm).mean().item()
+            )
+            self.stats["drpo/term_is"].append(
+                self.accelerator.gather_for_metrics(
+                    is_ratio_chosen * residual - is_ratio_rejected * residual
+                ).mean().item()
+            )
+            self.stats["drpo/preference_score"].append(
+                self.accelerator.gather_for_metrics(g_chosen_rejected).mean().item()
+            )
+            
+            # Generated sample quality metrics
+            g_mc_rejected_gathered = self.accelerator.gather_for_metrics(all_g_mc_rejected.flatten())
+            g_mc_chosen_gathered = self.accelerator.gather_for_metrics(all_g_mc_chosen.flatten())
+            
+            self.stats["generated/vs_rejected_mean"].append(g_mc_rejected_gathered.mean().item())
+            self.stats["generated/vs_rejected_std"].append(g_mc_rejected_gathered.std().item())
+            self.stats["generated/vs_chosen_mean"].append(g_mc_chosen_gathered.mean().item())
+            self.stats["generated/vs_chosen_std"].append(g_mc_chosen_gathered.std().item())
+            
+            # Preference margins and win rates
+            self.stats["generated/margin_over_rejected"].append(
+                (g_mc_rejected_gathered - 0.5).mean().item()
+            )
+            self.stats["generated/margin_over_chosen"].append(
+                (0.5 - g_mc_chosen_gathered).mean().item()
+            )
+            self.stats["generated/win_rate_vs_rejected"].append(
+                (g_mc_rejected_gathered > 0.5).float().mean().item()
+            )
+            self.stats["generated/win_rate_vs_chosen"].append(
+                (g_mc_chosen_gathered > 0.5).float().mean().item()
+            )
+            
+            # Generation quality
+            mc_lengths_gathered = self.accelerator.gather_for_metrics(all_mc_lengths.flatten())
+            mc_eos_gathered = self.accelerator.gather_for_metrics(all_mc_contains_eos.flatten().float())
+            
+            self.stats["generated/contains_eos_rate"].append(mc_eos_gathered.mean().item())
+            self.stats["generated/avg_length"].append(mc_lengths_gathered.float().mean().item())
+            self.stats["generated/length_std"].append(mc_lengths_gathered.float().std().item())
+            
+            # IS ratio statistics with clipping indicators
+            is_chosen_at_min = (is_ratio_chosen == self.args.is_clip_min).float()
+            is_chosen_at_max = (is_ratio_chosen == self.args.is_clip_max).float()
+            is_rejected_at_min = (is_ratio_rejected == self.args.is_clip_min).float()
+            is_rejected_at_max = (is_ratio_rejected == self.args.is_clip_max).float()
+            
+            self.stats["is_ratio/chosen_mean"].append(
+                self.accelerator.gather_for_metrics(is_ratio_chosen).mean().item()
+            )
+            self.stats["is_ratio/chosen_std"].append(
+                self.accelerator.gather_for_metrics(is_ratio_chosen).std().item()
+            )
+            self.stats["is_ratio/chosen_max"].append(
+                self.accelerator.gather_for_metrics(is_ratio_chosen).max().item()
+            )
+            self.stats["is_ratio/clip_rate_chosen"].append(
+                self.accelerator.gather_for_metrics(is_chosen_at_min + is_chosen_at_max).mean().item()
+            )
+            
+            self.stats["is_ratio/rejected_mean"].append(
+                self.accelerator.gather_for_metrics(is_ratio_rejected).mean().item()
+            )
+            self.stats["is_ratio/rejected_std"].append(
+                self.accelerator.gather_for_metrics(is_ratio_rejected).std().item()
+            )
+            self.stats["is_ratio/rejected_max"].append(
+                self.accelerator.gather_for_metrics(is_ratio_rejected).max().item()
+            )
+            self.stats["is_ratio/clip_rate_rejected"].append(
+                self.accelerator.gather_for_metrics(is_rejected_at_min + is_rejected_at_max).mean().item()
+            )
+            
+            # Policy statistics
+            self.stats["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item()
+            )
+            self.stats["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item()
+            )
+            
+            mc_logprobs_gathered = self.accelerator.gather_for_metrics(all_mc_logprobs_sum.flatten())
+            self.stats["logps/generated_mean"].append(mc_logprobs_gathered.mean().item())
+            self.stats["logps/generated_std"].append(mc_logprobs_gathered.std().item())
+            
+            margins = chosen_logprobs_sum - rejected_logprobs_sum
+            self.stats["rewards/margins"].append(
+                self.accelerator.gather_for_metrics(margins).mean().item()
+            )
+            self.stats["rewards/accuracy"].append(
+                self.accelerator.gather_for_metrics((margins > 0).float()).mean().item()
+            )
+            
+            # KL statistics
+            all_kl_total = torch.stack(mc_kl_total_list)
+            self.stats["objective/kl"].append(
+                self.accelerator.gather_for_metrics(all_kl_total).mean().item()
+            )
+            
+            # Per-token KL average
+            # all_kl_per_token = torch.cat(mc_kl_per_token_list, dim=0)
+            # all_masks = torch.cat([mask for _, mask in mc_samples], dim=0)
+            # avg_per_token_kl = all_kl_per_token.sum() / all_masks.sum()
+            # self.stats["objective/kl_per_token"].append(
+            #     self.accelerator.gather_for_metrics(avg_per_token_kl).item()
+            # )
+            
+            # Entropy
+            all_entropy = torch.stack(mc_entropy_list)
+            self.stats["objective/entropy"].append(
+                self.accelerator.gather_for_metrics(all_entropy).mean().item()
+            )
+
+            
+            # Loss components
+            self.stats["loss/drpo"].append(
+                self.accelerator.gather_for_metrics(drpo_loss).mean().item()
+            )
+            self.stats["loss/kl"].append(
+                self.accelerator.gather_for_metrics(self.beta * kl_loss).mean().item()
+            )
+            self.stats["loss/total"].append(
+                self.accelerator.gather_for_metrics(loss).mean().item()
+            )
+            
+            self.stats["beta"].append(self.beta)
         
-        return loss
+        # Empty cache if needed
+        if (
+            self.args.torch_empty_cache_steps is not None
+            and self.state.global_step % self.args.torch_empty_cache_steps == 0
+        ):
+            empty_cache()
+        
+        # Handle multi-GPU averaging
+        if self.args.n_gpu > 1:
+            loss = loss.mean()
+        
+        # Backward pass
+        kwargs = {}
+        if self.args.optim in ["lomo", "adalomo"]:
+            kwargs["learning_rate"] = self._get_learning_rate()
+        
+        if self.use_apex:
+            from apex import amp
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss, **kwargs)
+        
+        return loss.detach() / self.args.gradient_accumulation_steps
     
     # def save_weight_analysis(self, output_path: str) -> None:
     #     """

@@ -179,7 +179,7 @@ def main():
     print("Initializing Dr.DRPO trainer...")
     trainer = DrDRPOTrainer(
         model=model,
-        ref_model=ref_model,
+        # ref_model=ref_model,
         reward_model=reward_model,
         args=training_config,
         train_dataset=train_dataset,
