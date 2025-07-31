@@ -3,7 +3,7 @@ import textwrap
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 from packaging import version
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1367,46 +1367,92 @@ class DRPOTrainer(OnlineDPOTrainer):
                         mc_texts_all.append(mc_texts)
                     
                     # Create table
-                    num_to_log = min(5, batch_size)
-                    columns = ["Prompt", "Chosen", "Rejected"]
-                    for i in range(len(mc_texts_all)):
-                        columns.append(f"Generated_{i+1}")
-                    columns.extend(["P(chosen>rej)", "P(gen1>rej)", "P(gen1>chosen)"])
+                    # num_to_log = min(5, batch_size)
+                    # columns = ["Prompt", "Chosen", "Rejected"]
+                    # for i in range(len(mc_texts_all)):
+                    #     columns.append(f"Generated_{i+1}")
+                    # columns.extend(["P(chosen>rej)", "P(gen1>rej)", "P(gen1>chosen)"])
                     
-                    table_data = []
+                    # table_data = []
+                    # for i in range(num_to_log):
+                    #     row = [
+                    #         prompt_texts[i][:300],
+                    #         chosen_texts[i][:300],
+                    #         rejected_texts[i][:300]
+                    #     ]
+                        
+                    #     for mc_texts in mc_texts_all:
+                    #         row.append(mc_texts[i][:300])
+                        
+                    #     row.extend([
+                    #         f"{g_chosen_rejected[i]:.3f}",
+                    #         f"{all_g_mc_rejected[0][i]:.3f}",
+                    #         f"{all_g_mc_chosen[0][i]:.3f}"
+                    #     ])
+                        
+                    #     table_data.append(row)
+                    
+                    # # # Log table and histograms
+                    # # table = wandb.Table(columns=columns, data=table_data)
+                    # # wandb.log({
+                    # #     "eval/samples": table,
+                    # #     "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
+                    # #     "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
+                    # #     "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
+                    # # })
+
+
+                    # 1. Log the table of generated text samples
+                    num_to_log = min(5, batch_size)
+                    headers = ["Prompt", "Chosen", "Rejected"]
+                    for i in range(len(mc_texts_all)):
+                        headers.append(f"Generated_{i+1}")
+                    headers.extend(["P(chosen>rej)", "P(gen1>rej)", "P(gen1>chosen)"])
+
+                    rows = []
                     for i in range(num_to_log):
                         row = [
                             prompt_texts[i][:300],
                             chosen_texts[i][:300],
                             rejected_texts[i][:300]
                         ]
-                        
                         for mc_texts in mc_texts_all:
                             row.append(mc_texts[i][:300])
-                        
                         row.extend([
                             f"{g_chosen_rejected[i]:.3f}",
                             f"{all_g_mc_rejected[0][i]:.3f}",
                             f"{all_g_mc_chosen[0][i]:.3f}"
                         ])
-                        
-                        table_data.append(row)
-                    
-                    # # Log table and histograms
-                    # table = wandb.Table(columns=columns, data=table_data)
-                    # wandb.log({
-                    #     "eval/samples": table,
-                    #     "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
-                    #     "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
-                    #     "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
-                    # })
+                        rows.append(row)
 
-                    swanlab.log({
-                        "eval/samples": swanlab.Table(columns=columns, data=table_data),
-                        "eval/g_mc_rejected_hist": swanlab.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
-                        "eval/g_mc_chosen_hist": swanlab.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
-                        "eval/mc_lengths_hist": swanlab.Histogram(all_mc_lengths[0].float().cpu().numpy())
-                    })
+                    # Create the echarts Table object
+                    table_chart = swanlab.echarts.Table()
+                    table_chart.add(headers, rows)
+                    swanlab.log({"eval/samples": table_chart})
+
+
+                    # 2. Log the histograms by creating Bar charts
+                    # Helper function to create a histogram bar chart
+                    def create_histogram_chart(data_array, num_bins=20):
+                        counts, bin_edges = np.histogram(data_array, bins=num_bins)
+                        # Create labels for the x-axis, e.g., "0.10-0.20"
+                        x_axis_labels = [f"{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}" for i in range(len(counts))]
+                        
+                        # Create and configure the Bar chart
+                        bar_chart = swanlab.echarts.Bar()
+                        bar_chart.add_xaxis(x_axis_labels)
+                        bar_chart.add_yaxis("count", counts.tolist()) # y-axis requires a name and list of values
+                        return bar_chart
+
+                    # Create and log each histogram
+                    g_mc_rejected_hist = create_histogram_chart(all_g_mc_rejected[0].float().cpu().numpy())
+                    swanlab.log({"eval/g_mc_rejected_hist": g_mc_rejected_hist})
+
+                    g_mc_chosen_hist = create_histogram_chart(all_g_mc_chosen[0].float().cpu().numpy())
+                    swanlab.log({"eval/g_mc_chosen_hist": g_mc_chosen_hist})
+
+                    mc_lengths_hist = create_histogram_chart(all_mc_lengths[0].float().cpu().numpy())
+                    swanlab.log({"eval/mc_lengths_hist": mc_lengths_hist})
             
             
             # Use negative preference accuracy as loss (lower is better)
