@@ -1269,6 +1269,7 @@ class DRPOTrainer(OnlineDPOTrainer):
                 all_mc_logprobs_sum = []
                 all_mc_kl = []
                 all_mc_entropy = []
+                mc_samples_for_logging = []
                 
                 for _ in range(num_eval_samples):
                     # Generate samples
@@ -1278,6 +1279,8 @@ class DRPOTrainer(OnlineDPOTrainer):
                     mc_ids = mc_ids.to(device)
                     mc_mask = mc_mask.to(device)
                     
+                    mc_samples_for_logging.append((mc_ids, mc_mask))
+
                     # Compute log probabilities
                     mc_logprobs = self._forward(model, prompt_ids, prompt_mask, mc_ids, mc_mask)
                     mc_logprobs_sum = (mc_logprobs * mc_mask).sum(1)

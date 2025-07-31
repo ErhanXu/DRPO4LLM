@@ -36,7 +36,7 @@ training_config = DrDRPOConfig(
     beta=0.05,
     kl_type="k3",
     is_clip_min=0.1,
-    is_clip_max=10.0,
+    is_clip_max=5.0,
     
     # Dr.DRPO specific parameters
     beta_prime=1.0,
