@@ -1392,17 +1392,17 @@ class DRPOTrainer(OnlineDPOTrainer):
                         
                         table_data.append(row)
                     
-                    # Log table and histograms
-                    table = wandb.Table(columns=columns, data=table_data)
-                    wandb.log({
-                        "eval/samples": table,
-                        "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
-                        "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
-                        "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
-                    })
+                    # # Log table and histograms
+                    # table = wandb.Table(columns=columns, data=table_data)
+                    # wandb.log({
+                    #     "eval/samples": table,
+                    #     "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
+                    #     "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
+                    #     "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
+                    # })
 
                     swanlab.log({
-                        "eval/samples": table,
+                        "eval/samples": swanlab.Table(columns=columns, data=table_data),
                         "eval/g_mc_rejected_hist": swanlab.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
                         "eval/g_mc_chosen_hist": swanlab.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
                         "eval/mc_lengths_hist": swanlab.Histogram(all_mc_lengths[0].float().cpu().numpy())
