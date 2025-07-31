@@ -1399,9 +1399,9 @@ class DRPOTrainer(OnlineDPOTrainer):
                     table = wandb.Table(columns=columns, data=table_data)
                     wandb.log({
                         "eval/samples": table,
-                        "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].cpu().numpy()),
-                        "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].cpu().numpy()),
-                        "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].cpu().numpy())
+                        "eval/g_mc_rejected_hist": wandb.Histogram(all_g_mc_rejected[0].float().cpu().numpy()),
+                        "eval/g_mc_chosen_hist": wandb.Histogram(all_g_mc_chosen[0].float().cpu().numpy()),
+                        "eval/mc_lengths_hist": wandb.Histogram(all_mc_lengths[0].float().cpu().numpy())
                     })
             
             
