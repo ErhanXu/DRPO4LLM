@@ -161,6 +161,151 @@ class GPMwithRewardNetwork(nn.Module):
         return rewards
 
 
+class DPOStyleRewardNetwork(nn.Module):
+    """
+    A reward network that computes DPO-style rewards.
+    
+    This network returns rewards of the form:
+    r(x, y) = β * log(π(y|x) / π_ref(y|x))
+    
+    where π is the trained model and π_ref is the reference model.
+    This formulation allows using DPO-trained models as reward models
+    in a Bradley-Terry preference framework.
+    """
+    
+    def __init__(
+        self,
+        model_name_or_path: str,
+        beta: float = 0.1,
+        device: Optional[torch.device] = None,
+        bf16: bool = True,
+        trust_remote_code: bool = True,
+    ):
+        """
+        Initialize the DPO-style reward network.
+        
+        Args:
+            model_name_or_path: Path to the trained HuggingFace model (should be DPO-trained)
+            beta: Temperature parameter for the DPO reward scaling
+            device: Device to load the model on
+            bf16: Whether to use bfloat16 precision
+            trust_remote_code: Whether to trust remote code when loading the model
+        """
+        super().__init__()
+        
+        self.beta = beta
+        
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
+        
+        # Load the trained policy model
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path,
+            torch_dtype=torch.bfloat16 if bf16 else "auto",
+            device_map=device,
+            trust_remote_code=trust_remote_code,
+        )
+        
+        # Ensure model is in eval mode
+        self.model.eval()
+        
+    def compute_log_probs(
+        self,
+        model: nn.Module,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Compute log probabilities for the given sequences.
+        
+        Args:
+            model: The model to use for computing log probs
+            input_ids: Token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            temperature: Temperature for scaling logits
+            
+        Returns:
+            Log probabilities summed over the sequence [batch_size]
+        """
+        with torch.no_grad():
+            # Get model outputs
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True,
+            )
+            
+            # Get logits and apply temperature
+            logits = outputs.logits / (temperature + 1e-7)
+            
+            # Shift logits and labels for next token prediction
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = input_ids[:, 1:].contiguous()
+            shift_mask = attention_mask[:, 1:].contiguous()
+            
+            # Compute log probabilities
+            log_probs = F.log_softmax(shift_logits, dim=-1)
+            
+            # Gather log probs for actual tokens
+            batch_size, seq_len = shift_labels.shape
+            gathered_log_probs = log_probs.gather(
+                dim=2,
+                index=shift_labels.unsqueeze(2)
+            ).squeeze(2)
+            
+            # Mask and sum
+            masked_log_probs = gathered_log_probs * shift_mask
+            total_log_probs = masked_log_probs.sum(dim=1)
+            
+            return total_log_probs
+    
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        ref_logprobs_sum: Optional[torch.Tensor] = None,
+        ref_model: Optional[nn.Module] = None,
+        temperature: float = 1.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute DPO-style rewards.
+        
+        Args:
+            input_ids: Token IDs for the full sequence (prompt + response) [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            ref_log_probs: Precomputed reference model log probabilities [batch_size]
+                          If provided, ref_model is ignored
+            ref_model: Reference model to compute π_ref(y|x)
+                      Required if ref_log_probs is not provided
+            temperature: Temperature for scaling logits
+            
+        Returns:
+            rewards: DPO-style rewards β * log(π/π_ref) [batch_size]
+            logits: For compatibility with BT models (same as rewards) [batch_size, 1]
+        """
+        # Compute policy log probabilities
+        policy_log_probs = self.compute_log_probs(
+            self.model, input_ids, attention_mask, temperature
+        )
+        
+        # Get reference log probabilities
+        if ref_logprobs_sum is None:
+            if ref_model is None:
+                raise ValueError(
+                    "Either ref_log_probs or ref_model must be provided"
+                )
+            ref_logprobs_sum = self.compute_log_probs(
+                ref_model, input_ids, attention_mask, temperature
+            )
+        
+        # Compute DPO-style reward: β * log(π/π_ref) = β * (log π - log π_ref)
+        rewards = self.beta * (policy_log_probs - ref_logprobs_sum)
+
+        return rewards
+
+
 
 def get_preference_score_without_decoding(
     preference_model: nn.Module,

@@ -1435,7 +1435,7 @@ class DRPOTrainer(OnlineDPOTrainer):
                             rejected_texts[i][:300]
                         ]
                         for mc_texts in mc_texts_all:
-                            row.append(random.shuffle(mc_texts)[i][:300])
+                            row.append(mc_texts[i][:300])
                         row.extend([
                             f"{g_chosen_rejected[i]:.3f}",
                             f"{all_g_mc_rejected[0][i]:.3f}",
