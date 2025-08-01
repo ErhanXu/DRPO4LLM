@@ -161,6 +161,7 @@ class GPMwithRewardNetwork(nn.Module):
         return rewards
 
 
+
 class DPOStyleRewardNetwork(nn.Module):
     """
     A reward network that computes DPO-style rewards.
@@ -168,38 +169,46 @@ class DPOStyleRewardNetwork(nn.Module):
     This network returns rewards of the form:
     r(x, y) = β * log(π(y|x) / π_ref(y|x))
     
-    where π is the trained model and π_ref is the reference model.
+    where π is the trained DPO model and π_ref is the reference model.
     This formulation allows using DPO-trained models as reward models
     in a Bradley-Terry preference framework.
+    
+    The reference model is initialized internally, making this class
+    self-contained and compatible with the DRPO framework's preference model interface.
     """
     
     def __init__(
         self,
         model_name_or_path: str,
+        ref_model_name_or_path: str,
         beta: float = 0.1,
         device: Optional[torch.device] = None,
+        pad_token_id: Optional[int] = None,
         bf16: bool = True,
         trust_remote_code: bool = True,
     ):
         """
-        Initialize the DPO-style reward network.
+        Initialize the DPO-style reward network with both policy and reference models.
         
         Args:
-            model_name_or_path: Path to the trained HuggingFace model (should be DPO-trained)
+            model_name_or_path: Path to the trained DPO model (π)
+            ref_model_name_or_path: Path to the reference model (π_ref)
             beta: Temperature parameter for the DPO reward scaling
-            device: Device to load the model on
+            device: Device to load the models on
+            pad_token_id: Padding token ID
             bf16: Whether to use bfloat16 precision
-            trust_remote_code: Whether to trust remote code when loading the model
+            trust_remote_code: Whether to trust remote code when loading models
         """
         super().__init__()
         
         self.beta = beta
+        self.pad_token_id = pad_token_id
         
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         
-        # Load the trained policy model
+        # Load the trained policy model (π)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
             torch_dtype=torch.bfloat16 if bf16 else "auto",
@@ -207,9 +216,29 @@ class DPOStyleRewardNetwork(nn.Module):
             trust_remote_code=trust_remote_code,
         )
         
-        # Ensure model is in eval mode
-        self.model.eval()
+        # Load the reference model (π_ref)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(
+            ref_model_name_or_path,
+            torch_dtype=torch.bfloat16 if bf16 else "auto",
+            device_map=device,
+            trust_remote_code=trust_remote_code,
+        )
         
+        # Set padding token if needed
+        if pad_token_id is not None:
+            self.model.config.pad_token_id = pad_token_id
+            self.ref_model.config.pad_token_id = pad_token_id
+        
+        # Ensure both models are in eval mode
+        self.model.eval()
+        self.ref_model.eval()
+        
+        # Freeze both models
+        for param in self.model.parameters():
+            param.requires_grad = False
+        for param in self.ref_model.parameters():
+            param.requires_grad = False
+    
     def compute_log_probs(
         self,
         model: nn.Module,
@@ -265,45 +294,47 @@ class DPOStyleRewardNetwork(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        ref_logprobs_sum: Optional[torch.Tensor] = None,
-        ref_model: Optional[nn.Module] = None,
         temperature: float = 1.0,
     ) -> torch.Tensor:
         """
         Compute DPO-style rewards.
         
+        This method is designed to be compatible with the DRPO framework's
+        preference model interface, mimicking the output format of standard
+        reward models used in Bradley-Terry preference modeling.
+        
         Args:
             input_ids: Token IDs for the full sequence (prompt + response) [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len]
-            ref_log_probs: Precomputed reference model log probabilities [batch_size]
-                          If provided, ref_model is ignored
-            ref_model: Reference model to compute π_ref(y|x)
-                      Required if ref_log_probs is not provided
             temperature: Temperature for scaling logits
             
         Returns:
-            rewards: DPO-style rewards β * log(π/π_ref) [batch_size]
-            logits: For compatibility with BT models (same as rewards) [batch_size, 1]
+            RewardOutput object with logits attribute containing DPO rewards [batch_size, 1]
         """
         # Compute policy log probabilities
         policy_log_probs = self.compute_log_probs(
             self.model, input_ids, attention_mask, temperature
         )
         
-        # Get reference log probabilities
-        if ref_logprobs_sum is None:
-            if ref_model is None:
-                raise ValueError(
-                    "Either ref_log_probs or ref_model must be provided"
-                )
-            ref_logprobs_sum = self.compute_log_probs(
-                ref_model, input_ids, attention_mask, temperature
-            )
+        # Compute reference log probabilities
+        ref_log_probs = self.compute_log_probs(
+            self.ref_model, input_ids, attention_mask, temperature
+        )
         
         # Compute DPO-style reward: β * log(π/π_ref) = β * (log π - log π_ref)
-        rewards = self.beta * (policy_log_probs - ref_logprobs_sum)
-
+        rewards = self.beta * (policy_log_probs - ref_log_probs)
+        
+        # Return in format compatible with Bradley-Terry models
+        # The logits output is expected by the preference scoring functions
         return rewards
+    
+    def to(self, device: Union[str, torch.device]) -> 'DPOStyleRewardNetwork':
+        """Move all models to the specified device."""
+        super().to(device)
+        self.model = self.model.to(device)
+        self.ref_model = self.ref_model.to(device)
+        self.device = device if isinstance(device, torch.device) else torch.device(device)
+        return self
 
 
 

@@ -196,7 +196,7 @@ def main():
     tokenizer.save_pretrained(training_config.output_dir)
     
     # Save weight analysis for noise detection
-    trainer.save_weight_analysis(os.path.join(OUTPUT_DIR, "weight_analysis.json"))
+    # trainer.save_weight_analysis(os.path.join(OUTPUT_DIR, "weight_analysis.json"))
     
     print("Training complete!")
     print("\nAnalyze results with:")

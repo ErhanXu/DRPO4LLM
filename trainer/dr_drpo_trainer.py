@@ -10,6 +10,7 @@ import numpy as np
 
 from .drpo_trainer_new import DRPOTrainer
 from .drpo_config_new import DRPOConfig
+from .drpo_utils_new import DPOStyleRewardNetwork, GPMwithRewardNetwork
 
 
 @dataclass
@@ -21,7 +22,19 @@ class DrDRPOConfig(DRPOConfig):
         default=(0.01, 100.0), 
         metadata={"help": "Range for clipping sample weights to avoid extreme values"}
     )
+    use_dpo_style_reward: bool = field(
+        default=False,
+        metadata={"help": "Whether to use DPO-style reward model as preference model"}
+    )
+    dpo_reward_beta: float = field(
+        default=0.1,
+        metadata={"help": "Beta parameter for DPO-style reward computation"}
+    )
 
+    dpo_ref_model_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to reference model for DPO-style rewards"}
+    )
 
 class DrDRPOTrainer(DRPOTrainer):
     """
@@ -36,7 +49,18 @@ class DrDRPOTrainer(DRPOTrainer):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
+        if self.args and self.args.use_preference_model and self.args.preference_model_path:
+            if self.args.use_dpo_style_reward:
+                self.preference_model = DPOStyleRewardNetwork(
+                    model_name_or_path=args.preference_model_path,
+                    ref_model_name_or_path=args.dpo_ref_model_path,
+                    beta=args.dpo_reward_beta,
+                    device=self.accelerator.device,
+                    pad_token_id=self.processing_class.pad_token_id,
+                    bf16=args.bf16,
+                )
+                self.args.preference_model_type="bt"   
         # Extract Dr.DRPO specific parameters from config if available
         if hasattr(self.args, 'beta_prime'):
             self.beta_prime = self.args.beta_prime
@@ -52,6 +76,11 @@ class DrDRPOTrainer(DRPOTrainer):
             self.weight_clip_range = self.args.weight_clip_range
         else:
             self.weight_clip_range = (0.01, 100.0)
+        
+        if hasattr(self.args, 'dpo_reward_beta'):
+            self.dpo_reward_beta = self.args.dpo_reward_beta
+        else:
+            self.dpo_reward_beta = 0.1
         
         # Add Dr.DRPO specific stats
         self.stats.update({
@@ -361,8 +390,9 @@ class DrDRPOTrainer(DRPOTrainer):
             all_mc_lengths = []
             all_mc_contains_eos = []
             all_mc_logprobs_sum = []
+            all_mc_ref_logprobs_sum = []
             
-            for (mc_ids, mc_mask), mc_logprobs in zip(mc_samples, mc_logprobs_list):
+            for (mc_ids, mc_mask), mc_logprobs, mc_ref_logprobs in zip(mc_samples, mc_logprobs_list, mc_ref_logprobs_list):
                 # Re-compute preference scores for logging
                 g_mc_rej = self._compute_preference_scores_batch(
                     prompt_ids, prompt_mask, mc_ids, mc_mask, rejected_ids, rejected_mask
@@ -383,6 +413,9 @@ class DrDRPOTrainer(DRPOTrainer):
                 
                 mc_logprobs_sum = (mc_logprobs * mc_mask).sum(dim=1)
                 all_mc_logprobs_sum.append(mc_logprobs_sum)
+
+                mc_ref_logprobs_sum = (mc_ref_logprobs * mc_mask).sum(dim=1)
+                all_mc_logprobs_sum.append(mc_ref_logprobs_sum)
             
             # Stack all MC samples
             all_g_mc_rejected = torch.stack(all_g_mc_rejected)  # [num_mc, batch_size]
@@ -390,6 +423,7 @@ class DrDRPOTrainer(DRPOTrainer):
             all_mc_lengths = torch.stack(all_mc_lengths)
             all_mc_contains_eos = torch.stack(all_mc_contains_eos)
             all_mc_logprobs_sum = torch.stack(all_mc_logprobs_sum)
+            all_mc_ref_logprobs_sum = torch.stack(all_mc_ref_logprobs_sum)
             
             # Core DRPO metrics
             self.stats["drpo/term_dm"].append(
@@ -487,11 +521,8 @@ class DrDRPOTrainer(DRPOTrainer):
                 self.accelerator.gather_for_metrics(rejected_ref_logprobs_sum).mean().item()
             )
 
-            self.stats["logps/generated_ref_mean"].append(
-                self.accelerator.gather_for_metrics(
-                    torch.stack(mc_ref_logprobs_list).flatten()
-                ).mean().item()
-            )
+            mc_ref_logprobs_gathered = self.accelerator.gather_for_metrics(all_mc_logprobs_sum.flatten())
+            self.stats["logps/generated_ref_mean"].append(mc_ref_logprobs_gathered.mean().item())
             
             margins = chosen_logprobs_sum - rejected_logprobs_sum
             self.stats["rewards/margins"].append(
