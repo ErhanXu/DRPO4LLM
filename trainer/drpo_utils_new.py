@@ -1,6 +1,6 @@
 # drpo_utils.py
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -268,7 +268,7 @@ class DPOStyleRewardNetwork(nn.Module):
         ref_logprobs_sum: Optional[torch.Tensor] = None,
         ref_model: Optional[nn.Module] = None,
         temperature: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """
         Compute DPO-style rewards.
         
