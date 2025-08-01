@@ -18,7 +18,7 @@ from trainer.dr_drpo_trainer import DrDRPOTrainer, DrDRPOConfig
 MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"  # Change to your model
 REWARD_MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-gpm-hh-2e-2dim"  # Change to your reward model
 DATASET_NAME = "Eehan/train_data_helpful_flipped-10"  # Change to your dataset
-OUTPUT_DIR = "./drpo-flipped-nolora"
+OUTPUT_DIR = "./drpo-flipped-lora-hh"
 
 # Training configuration
 training_config = DrDRPOConfig(
