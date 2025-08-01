@@ -415,7 +415,7 @@ class DrDRPOTrainer(DRPOTrainer):
                 all_mc_logprobs_sum.append(mc_logprobs_sum)
 
                 mc_ref_logprobs_sum = (mc_ref_logprobs * mc_mask).sum(dim=1)
-                all_mc_logprobs_sum.append(mc_ref_logprobs_sum)
+                all_mc_ref_logprobs_sum.append(mc_ref_logprobs_sum)
             
             # Stack all MC samples
             all_g_mc_rejected = torch.stack(all_g_mc_rejected)  # [num_mc, batch_size]
