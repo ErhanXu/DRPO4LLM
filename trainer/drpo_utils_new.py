@@ -1,6 +1,6 @@
 # drpo_utils.py
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
