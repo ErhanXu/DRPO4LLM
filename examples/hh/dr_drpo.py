@@ -4,7 +4,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 import swanlab
 import wandb
 os.environ["WANDB_MODE"] = "offline"
-swanlab.init("drdrpo-flipped-lora-hh")
 swanlab.sync_wandb()
 import argparse
 
@@ -13,7 +12,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, TaskType, get_peft_model
 
-from trainer.drdrpo_trainer import DrDRPOTrainer, DrDRPOConfig
+from trainer.dr_drpo_trainer import DrDRPOTrainer, DrDRPOConfig
 
 # Configuration
 MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e"  # Change to your model
@@ -26,15 +25,15 @@ training_config = DrDRPOConfig(
     output_dir=OUTPUT_DIR,
     
     # Basic training parameters
-    per_device_train_batch_size=2,
+    per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
-    per_device_eval_batch_size=4,
+    per_device_eval_batch_size=8,
     learning_rate=5e-7,
     num_train_epochs=1,
     
     # DRPO parameters
     num_monte_carlo_samples=2,
-    beta=0.05,
+    beta=0.04,
     kl_type="k3",
     is_clip_min=0.1,
     is_clip_max=5.0,
@@ -46,7 +45,7 @@ training_config = DrDRPOConfig(
     
     # Generation parameters
     max_new_tokens=256,
-    temperature=0.85,
+    temperature=0.88,
     max_length=1024,
     max_prompt_length=512,
     max_completion_length=512,
@@ -61,10 +60,10 @@ training_config = DrDRPOConfig(
     # Logging and saving
     logging_steps=10,
     save_strategy="steps",
-    save_steps=500,
+    save_steps=300,
     save_total_limit=2,
     eval_strategy="steps",
-    eval_steps=100,
+    eval_steps=50,
     
     # Evaluation
     eval_with_generation=True,
@@ -83,8 +82,8 @@ training_config = DrDRPOConfig(
 # LoRA configuration
 lora_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
-    r=32,
-    lora_alpha=64,
+    r=64,
+    lora_alpha=128,
     lora_dropout=0.05,
     bias="none",
     target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
@@ -100,7 +99,7 @@ def main():
     print("Loading and preparing dataset...")
     # Load dataset
     train_dataset = load_dataset(DATASET_NAME, split="train")  # Using subset for demo
-    eval_dataset = load_dataset(DATASET_NAME, split="test[:500]")
+    eval_dataset = load_dataset(DATASET_NAME, split="test[:320]")
     # eval_dataset = None
     
     print(f"Train size: {len(train_dataset)}, Eval size: {len(eval_dataset)}")
