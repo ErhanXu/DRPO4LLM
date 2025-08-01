@@ -43,15 +43,15 @@ training_config = DrDRPOConfig(
     output_dir=OUTPUT_DIR,
     
     # Basic training parameters
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
-    per_device_eval_batch_size=16,
+    per_device_eval_batch_size=32,
     learning_rate=5e-7,
     num_train_epochs=1,
     
     # DRPO parameters
     num_monte_carlo_samples=2,
-    beta=0.05,
+    beta=0.02,
     kl_type="k3",
     is_clip_min=0.1,
     is_clip_max=5.0,
@@ -62,7 +62,7 @@ training_config = DrDRPOConfig(
     
     # Generation parameters
     max_new_tokens=128,
-    temperature=0.75,
+    temperature=0.66,
     max_length=640,
     max_prompt_length=512,
     max_completion_length=128,
