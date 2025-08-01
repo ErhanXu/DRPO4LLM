@@ -299,7 +299,7 @@ class DrDRPOTrainer(DRPOTrainer):
         
         # Importance Sampling (IS) terms
         chosen_logprobs_sum = (chosen_logprobs * chosen_mask).sum(dim=1)
-        rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(dim=1)
+        chosen_ref_logprobs_sum = (chosen_ref_logprobs * chosen_mask).sum(dim=1)
         rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(dim=1)
         rejected_ref_logprobs_sum = (rejected_ref_logprobs * rejected_mask).sum(dim=1)
         
