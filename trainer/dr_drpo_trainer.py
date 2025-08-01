@@ -300,6 +300,8 @@ class DrDRPOTrainer(DRPOTrainer):
         # Importance Sampling (IS) terms
         chosen_logprobs_sum = (chosen_logprobs * chosen_mask).sum(dim=1)
         rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(dim=1)
+        rejected_logprobs_sum = (rejected_logprobs * rejected_mask).sum(dim=1)
+        rejected_ref_logprobs_sum = (rejected_ref_logprobs * rejected_mask).sum(dim=1)
         
         # Compute controlled IS ratios
         is_ratio_chosen = self._compute_is_ratio_controlled(
