@@ -891,7 +891,7 @@ class DRPOTrainer(OnlineDPOTrainer):
         
         # IS loss term
         residual = 1 - g_chosen_rejected
-        is_loss = -(
+        is_loss = - 0.5 * (
             is_ratio_chosen * residual * chosen_logprobs_sum -
             is_ratio_rejected * residual * rejected_logprobs_sum
         ).mean()
