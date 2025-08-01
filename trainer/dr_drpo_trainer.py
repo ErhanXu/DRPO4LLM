@@ -475,7 +475,21 @@ class DrDRPOTrainer(DRPOTrainer):
             
             mc_logprobs_gathered = self.accelerator.gather_for_metrics(all_mc_logprobs_sum.flatten())
             self.stats["logps/generated_mean"].append(mc_logprobs_gathered.mean().item())
-            self.stats["logps/generated_std"].append(mc_logprobs_gathered.std().item())
+            # self.stats["logps/generated_std"].append(mc_logprobs_gathered.std().item())
+
+            self.stats["logps/chosen_ref"].append(
+                self.accelerator.gather_for_metrics(chosen_ref_logprobs_sum).mean().item()
+            )
+
+            self.stats["logps/rejected_ref"].append(
+                self.accelerator.gather_for_metrics(rejected_ref_logprobs_sum).mean().item()
+            )
+
+            self.stats["logps/generated_ref_mean"].append(
+                self.accelerator.gather_for_metrics(
+                    torch.stack(mc_ref_logprobs_list).flatten()
+                ).mean().item()
+            )
             
             margins = chosen_logprobs_sum - rejected_logprobs_sum
             self.stats["rewards/margins"].append(
